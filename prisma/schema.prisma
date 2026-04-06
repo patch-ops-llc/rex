@@ -1,0 +1,254 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [pgvector(map: "vector")]
+}
+
+// ============================================================
+// CORE ENGAGEMENT MODEL
+// ============================================================
+
+model Engagement {
+  id              String           @id @default(cuid())
+  name            String
+  clientName      String
+  industry        String?
+  hubspotTier     String?
+  hubspotPortalId String?
+  hubspotToken    String?
+  status          EngagementStatus @default(CREATED)
+  embedding       Unsupported("vector(1536)")?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  discoveryCalls     DiscoveryCall[]
+  buildPlan          BuildPlan?
+  implementations    Implementation[]
+  qaItems            QAItem[]
+  enablementSessions EnablementSession[]
+  conversations      ClientConversation[]
+  workRequests       WorkRequest[]
+  slackMapping       ClientSlackMapping?
+  emailMapping       ClientEmailMapping?
+}
+
+enum EngagementStatus {
+  CREATED
+  SCHEDULED
+  DISCOVERY
+  PLAN_GENERATION
+  PLAN_REVIEW
+  IMPLEMENTING
+  QA
+  ENABLEMENT
+  ACTIVE_SUPPORT
+  COMPLETE
+}
+
+// ============================================================
+// DISCOVERY
+// ============================================================
+
+model DiscoveryCall {
+  id             String     @id @default(cuid())
+  engagementId   String
+  engagement     Engagement @relation(fields: [engagementId], references: [id])
+  meetingUrl     String?
+  recallBotId    String?
+  sessionId      String?    @unique
+  status         CallStatus @default(SCHEDULED)
+  autonomyLevel  Int        @default(1)
+  rawTranscript  Json?
+  structuredData Json?
+  decisionTree   Json?
+  summary        String?
+  speakerProfiles Json?
+  duration       Int?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+}
+
+enum CallStatus {
+  SCHEDULED
+  WAITING
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+}
+
+// ============================================================
+// BUILD PLANNING & IMPLEMENTATION
+// ============================================================
+
+model BuildPlan {
+  id           String     @id @default(cuid())
+  engagementId String     @unique
+  engagement   Engagement @relation(fields: [engagementId], references: [id])
+  version      Int        @default(1)
+  status       PlanStatus @default(DRAFT)
+  planData     Json
+  humanEdits   Json?
+  approvedBy   String?
+  approvedAt   DateTime?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+}
+
+enum PlanStatus {
+  DRAFT
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+  IMPLEMENTING
+  COMPLETED
+}
+
+model Implementation {
+  id              String     @id @default(cuid())
+  engagementId    String
+  engagement      Engagement @relation(fields: [engagementId], references: [id])
+  stepType        String
+  stepName        String
+  stepOrder       Int
+  config          Json
+  status          StepStatus @default(PENDING)
+  hubspotResponse Json?
+  rollbackData    Json?
+  errorMessage    String?
+  executedAt      DateTime?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+}
+
+enum StepStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+  ROLLED_BACK
+  NEEDS_REVIEW
+}
+
+// ============================================================
+// QA & ENABLEMENT
+// ============================================================
+
+model QAItem {
+  id           String     @id @default(cuid())
+  engagementId String
+  engagement   Engagement @relation(fields: [engagementId], references: [id])
+  category     String
+  description  String
+  status       QAStatus   @default(PENDING)
+  assignedTo   String?
+  notes        String?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+}
+
+enum QAStatus {
+  PENDING
+  PASSED
+  FAILED
+  SKIPPED
+}
+
+model EnablementSession {
+  id           String     @id @default(cuid())
+  engagementId String
+  engagement   Engagement @relation(fields: [engagementId], references: [id])
+  type         String
+  status       String     @default("DRAFT")
+  content      Json?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+}
+
+// ============================================================
+// CLIENT AGENT (Ongoing Support)
+// ============================================================
+
+model ClientSlackMapping {
+  id             String     @id @default(cuid())
+  slackTeamId    String     @unique
+  slackChannelId String?
+  engagementId   String     @unique
+  engagement     Engagement @relation(fields: [engagementId], references: [id])
+  botToken       String
+  createdAt      DateTime   @default(now())
+}
+
+model ClientEmailMapping {
+  id               String     @id @default(cuid())
+  emailDomain      String
+  engagementId     String     @unique
+  engagement       Engagement @relation(fields: [engagementId], references: [id])
+  authorizedEmails String[]
+  createdAt        DateTime   @default(now())
+}
+
+model ClientConversation {
+  id              String     @id @default(cuid())
+  engagementId    String
+  engagement      Engagement @relation(fields: [engagementId], references: [id])
+  platform        String
+  userId          String
+  userMessage     String
+  agentResponse   String
+  intent          String
+  actionTaken     String?
+  executionPlanId String?
+  embedding       Unsupported("vector(1536)")?
+  createdAt       DateTime   @default(now())
+}
+
+model WorkRequest {
+  id              String            @id @default(cuid())
+  engagementId    String
+  engagement      Engagement        @relation(fields: [engagementId], references: [id])
+  requestedBy     String
+  requestText     String
+  executionPlan   Json
+  riskAssessment  Json
+  status          WorkRequestStatus @default(PENDING_APPROVAL)
+  approvedBy      String?
+  approvedAt      DateTime?
+  deniedReason    String?
+  executionLog    Json?
+  verificationLog Json?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+}
+
+enum WorkRequestStatus {
+  PENDING_APPROVAL
+  APPROVED
+  DENIED
+  EXECUTING
+  VERIFYING
+  COMPLETED
+  FAILED
+}
+
+// ============================================================
+// TRAINING CORPUS
+// ============================================================
+
+model CorpusEntry {
+  id         String   @id @default(cuid())
+  name       String
+  transcript Json
+  annotations Json?
+  tags       String[]
+  industry   String?
+  complexity String?
+  outcome    String?
+  embedding  Unsupported("vector(1536)")?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}

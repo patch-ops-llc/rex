@@ -1,0 +1,25 @@
+{
+  "name": "rex",
+  "private": true,
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate dev",
+    "db:studio": "prisma studio"
+  },
+  "devDependencies": {
+    "turbo": "^2",
+    "typescript": "^5",
+    "prisma": "^6"
+  },
+  "dependencies": {
+    "@prisma/client": "^6"
+  },
+  "packageManager": "pnpm@9.15.4",
+  "engines": {
+    "node": ">=20"
+  }
+}
