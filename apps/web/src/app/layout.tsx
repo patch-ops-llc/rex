@@ -15,11 +15,17 @@ export default function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
-  return (
-    <ClerkProvider>
-      <html lang="en">
-        <body className={inter.className}>{children}</body>
-      </html>
-    </ClerkProvider>
+  const hasClerk = !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+
+  const body = (
+    <html lang="en">
+      <body className={inter.className}>{children}</body>
+    </html>
   );
+
+  if (hasClerk) {
+    return <ClerkProvider>{body}</ClerkProvider>;
+  }
+
+  return body;
 }
