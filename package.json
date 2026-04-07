@@ -12,9 +12,11 @@
     "db:studio": "prisma studio"
   },
   "devDependencies": {
+    "mammoth": "^1.12.0",
+    "prisma": "^6",
+    "tsx": "^4",
     "turbo": "^2",
-    "typescript": "^5",
-    "prisma": "^6"
+    "typescript": "^5"
   },
   "dependencies": {
     "@prisma/client": "^6"
