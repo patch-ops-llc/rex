@@ -6,6 +6,7 @@ import {
   LayoutDashboard,
   Briefcase,
   BookOpen,
+  MessageSquare,
   Settings,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -14,6 +15,7 @@ const navigation = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { name: "Engagements", href: "/engagements", icon: Briefcase },
   { name: "Corpus", href: "/corpus", icon: BookOpen },
+  { name: "Chat", href: "/chat", icon: MessageSquare },
   { name: "Settings", href: "/settings", icon: Settings },
 ];
 

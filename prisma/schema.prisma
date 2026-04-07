@@ -256,6 +256,23 @@ model CorpusEntry {
 }
 
 // ============================================================
+// SLACK WORKSPACE CONNECTIONS (OAuth multi-workspace)
+// ============================================================
+
+model SlackWorkspace {
+  id          String   @id @default(cuid())
+  teamId      String   @unique
+  teamName    String
+  accessToken String
+  botUserId   String?
+  scope       String?
+  installedBy String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ============================================================
 // HUBSPOT PORTAL CONNECTIONS
 // ============================================================
 
