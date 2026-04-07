@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { prisma } from "@rex/shared";
 import { StatusBadge } from "@/components/status-badge";
+import { AddDiscoveryDialog } from "@/components/add-discovery-dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Card,
@@ -57,7 +58,14 @@ export default async function EngagementDetailPage({
 
       <Tabs defaultValue="discovery">
         <TabsList>
-          <TabsTrigger value="discovery">Discovery</TabsTrigger>
+          <TabsTrigger value="discovery">
+            Discovery
+            {engagement.discoveryCalls.length > 0 && (
+              <span className="ml-1.5 text-xs text-muted-foreground">
+                ({engagement.discoveryCalls.length})
+              </span>
+            )}
+          </TabsTrigger>
           <TabsTrigger value="build-plan">Build Plan</TabsTrigger>
           <TabsTrigger value="implementation">Implementation</TabsTrigger>
           <TabsTrigger value="qa">QA</TabsTrigger>
@@ -65,38 +73,81 @@ export default async function EngagementDetailPage({
 
         <TabsContent value="discovery">
           <Card>
-            <CardHeader>
-              <CardTitle>Discovery</CardTitle>
-              <CardDescription>
-                Discovery calls and captured requirements for this engagement.
-              </CardDescription>
+            <CardHeader className="flex flex-row items-start justify-between">
+              <div>
+                <CardTitle>Discovery</CardTitle>
+                <CardDescription>
+                  Discovery calls and captured requirements for this engagement.
+                </CardDescription>
+              </div>
+              <AddDiscoveryDialog engagementId={engagement.id} />
             </CardHeader>
             <CardContent>
               {engagement.discoveryCalls.length === 0 ? (
                 <p className="text-sm text-muted-foreground py-8 text-center">
-                  No discovery calls yet. Schedule a discovery call or enter
-                  requirements manually.
+                  No discovery calls yet. Add notes from a discovery call or
+                  enter requirements manually.
                 </p>
               ) : (
                 <div className="space-y-4">
-                  {engagement.discoveryCalls.map((call: any) => (
-                    <div
-                      key={call.id}
-                      className="rounded-lg border p-4 space-y-2"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-medium">
-                          {call.meetingUrl || "Manual Entry"}
-                        </span>
-                        <StatusBadge status={call.status} />
-                      </div>
-                      {call.summary && (
-                        <p className="text-sm text-muted-foreground">
-                          {call.summary}
+                  {engagement.discoveryCalls.map((call: any) => {
+                    const data = call.structuredData as any;
+                    return (
+                      <div
+                        key={call.id}
+                        className="rounded-lg border p-4 space-y-2"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm font-medium">
+                            {call.summary ||
+                              call.meetingUrl ||
+                              "Discovery Entry"}
+                          </span>
+                          <div className="flex items-center gap-2">
+                            {data?.meetingDate && (
+                              <span className="text-xs text-muted-foreground">
+                                {new Date(
+                                  data.meetingDate
+                                ).toLocaleDateString("en-US", {
+                                  month: "short",
+                                  day: "numeric",
+                                  year: "numeric",
+                                })}
+                              </span>
+                            )}
+                            <StatusBadge status={call.status} />
+                          </div>
+                        </div>
+                        {data?.attendees && (
+                          <p className="text-xs text-muted-foreground">
+                            Attendees: {data.attendees}
+                          </p>
+                        )}
+                        {data?.notes && (
+                          <div className="rounded bg-muted p-3 text-sm whitespace-pre-wrap">
+                            {data.notes}
+                          </div>
+                        )}
+                        {!data?.notes && call.summary && (
+                          <p className="text-sm text-muted-foreground">
+                            {call.summary}
+                          </p>
+                        )}
+                        <p className="text-xs text-muted-foreground">
+                          {new Date(call.createdAt).toLocaleDateString(
+                            "en-US",
+                            {
+                              month: "short",
+                              day: "numeric",
+                              year: "numeric",
+                              hour: "numeric",
+                              minute: "2-digit",
+                            }
+                          )}
                         </p>
-                      )}
-                    </div>
-                  ))}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </CardContent>

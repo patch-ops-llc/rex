@@ -11,6 +11,7 @@ export type {
   ClientConversation,
   WorkRequest,
   CorpusEntry,
+  HubSpotPortal,
 } from "@prisma/client";
 
 export {

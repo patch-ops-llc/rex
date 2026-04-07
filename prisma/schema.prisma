@@ -248,7 +248,24 @@ model CorpusEntry {
   industry   String?
   complexity String?
   outcome    String?
+  category   String?
+  source     String?
   embedding  Unsupported("vector(1536)")?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
+}
+
+// ============================================================
+// HUBSPOT PORTAL CONNECTIONS
+// ============================================================
+
+model HubSpotPortal {
+  id             String   @id @default(cuid())
+  name           String
+  portalId       String   @unique
+  accessToken    String
+  isActive       Boolean  @default(true)
+  lastVerifiedAt DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 }
