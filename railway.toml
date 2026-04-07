@@ -2,7 +2,7 @@
 buildCommand = "pnpm install && pnpm run build"
 
 [deploy]
-startCommand = "node apps/web/.next/standalone/apps/web/server.js"
+startCommand = "HOSTNAME=0.0.0.0 node apps/web/.next/standalone/apps/web/server.js"
 healthcheckPath = "/"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
