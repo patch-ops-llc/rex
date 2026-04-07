@@ -1,19 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+const hasClerk = !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
 
 function ClerkUserButton() {
-  const [UserButton, setUserButton] = useState<React.ComponentType<any> | null>(
-    null
-  );
+  if (!hasClerk) return null;
 
-  useEffect(() => {
-    import("@clerk/nextjs")
-      .then((mod) => setUserButton(() => mod.UserButton))
-      .catch(() => {});
-  }, []);
-
-  if (!UserButton) return null;
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { UserButton } = require("@clerk/nextjs");
   return <UserButton afterSignOutUrl="/sign-in" />;
 }
 
