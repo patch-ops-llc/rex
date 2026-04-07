@@ -2,7 +2,7 @@
   "name": "rex",
   "private": true,
   "scripts": {
-    "build": "prisma generate && turbo run build --filter=@rex/web",
+    "build": "prisma generate && turbo run build --filter=@rex/web && cp -r apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static",
     "start": "node apps/web/.next/standalone/apps/web/server.js",
     "dev": "turbo run dev",
     "lint": "turbo run lint",
