@@ -36,7 +36,7 @@ export default async function SharedWalkthroughPage({
           narration: s.narration,
           context: s.context,
           screenshotUrl: s.screenshotUrl,
-          annotations: s.annotations,
+          annotations: s.annotations as { x: number; y: number; width: number; height: number; label?: string }[] | null,
         }))}
         shareToken={walkthrough.shareToken}
         branded
