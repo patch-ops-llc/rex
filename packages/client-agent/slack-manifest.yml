@@ -39,7 +39,6 @@ oauth_config:
       - im:history
       - im:read
       - im:write
-      - commands
       - users:read
 
 settings:

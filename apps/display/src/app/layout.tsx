@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
+import "./globals.css";
 
 export const metadata: Metadata = {
   title: "REX Display",
-  description: "Call copilot visual output",
+  description: "Call copilot visual output — rendered by Recall.ai as in-meeting screen share",
 };
 
 export default function RootLayout({
@@ -11,8 +12,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
-      <body>{children}</body>
+    <html lang="en" className="dark">
+      <body className="bg-zinc-950 text-zinc-100 antialiased">{children}</body>
     </html>
   );
 }

@@ -609,17 +609,26 @@ export function PipelineView({
 
   const selectedPhaseData = phases.find((p) => p.phaseType === selectedPhase);
 
+  const [error, setError] = useState<string | null>(null);
+
   async function initPipeline() {
     setInitializing(true);
+    setError(null);
     try {
-      await fetch(`/api/engagements/${engagementId}/pipeline`, {
+      const res = await fetch(`/api/engagements/${engagementId}/pipeline`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "initialize" }),
       });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `Server error (${res.status})`);
+      }
       router.refresh();
-    } catch (error) {
-      console.error("Failed to initialize pipeline:", error);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to initialize pipeline";
+      console.error("Failed to initialize pipeline:", err);
+      setError(message);
     } finally {
       setInitializing(false);
     }
@@ -632,9 +641,9 @@ export function PipelineView({
         <CardHeader>
           <CardTitle>Delivery Pipeline</CardTitle>
           <CardDescription>
-            Initialize the delivery pipeline to track this engagement from SOW
-            through closeout. Each phase is modular and can be run
-            independently.
+            Set up all 10 delivery phases (SOW Setup through Closeout) for this
+            engagement. Each phase is modular — start, skip, or complete them
+            independently. Tasks are generated when you start each phase.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col items-center gap-4 py-8">
@@ -643,6 +652,9 @@ export function PipelineView({
               Tip: Add a SOW first to get the most from the pipeline. Discovery
               agendas and scope tracking are generated from SOW workstreams.
             </p>
+          )}
+          {error && (
+            <p className="text-sm text-red-600">{error}</p>
           )}
           <Button onClick={initPipeline} disabled={initializing}>
             {initializing ? (

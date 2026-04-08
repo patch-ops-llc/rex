@@ -38,8 +38,20 @@ export async function POST(
     }
 
     const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+    const displayUrl = process.env.DISPLAY_URL;
 
-    const recallBot = await createBot({
+    // Create the DB record first so we have a callId for the Display URL
+    const discoveryCall = await prisma.discoveryCall.create({
+      data: {
+        engagementId: params.id,
+        meetingUrl,
+        platform,
+        title: title || `${engagement.clientName} Discovery`,
+        status: "WAITING",
+      },
+    });
+
+    const botConfig: Parameters<typeof createBot>[0] = {
       meeting_url: meetingUrl,
       bot_name: "Rex",
       transcription_options: {
@@ -50,17 +62,30 @@ export async function POST(
         partial_results: true,
       },
       recording_mode: "audio_only",
-    });
+    };
 
-    const discoveryCall = await prisma.discoveryCall.create({
-      data: {
-        engagementId: params.id,
-        meetingUrl,
-        recallBotId: recallBot.id,
-        platform,
-        title: title || `${engagement.clientName} Discovery`,
-        status: "WAITING",
-      },
+    if (displayUrl) {
+      botConfig.output_media = {
+        camera: {
+          kind: "webpage",
+          config: {
+            url: `${displayUrl}/session/${discoveryCall.id}`,
+          },
+        },
+      };
+    }
+
+    let recallBot;
+    try {
+      recallBot = await createBot(botConfig);
+    } catch (err) {
+      await prisma.discoveryCall.delete({ where: { id: discoveryCall.id } });
+      throw err;
+    }
+
+    await prisma.discoveryCall.update({
+      where: { id: discoveryCall.id },
+      data: { recallBotId: recallBot.id },
     });
 
     const current = await prisma.engagement.findUnique({

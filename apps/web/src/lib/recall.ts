@@ -1,4 +1,5 @@
-const RECALL_API_BASE = "https://us-west-2.recall.ai/api/v2";
+const RECALL_API_BASE =
+  (process.env.RECALL_API_URL || "https://us-east-1.recall.ai") + "/api/v1";
 
 function getHeaders(): Record<string, string> {
   const key = process.env.RECALL_API_KEY;
@@ -24,6 +25,12 @@ export interface RecallBotConfig {
     partial_results?: boolean;
   };
   recording_mode?: "speaker_view" | "gallery_view" | "audio_only";
+  output_media?: {
+    camera?: {
+      kind: "webpage";
+      config: { url: string };
+    };
+  };
 }
 
 export interface RecallBot {

@@ -25,6 +25,7 @@ export default async function EngagementDetailPage({
   let engagement: any = null;
   let pipelineData: any = null;
   let walkthroughs: any[] = [];
+  let scopeDocuments: any[] = [];
 
   try {
     engagement = await prisma.engagement.findUnique({
@@ -83,6 +84,11 @@ export default async function EngagementDetailPage({
         where: { engagementId: params.id },
         orderBy: { createdAt: "desc" },
         include: { _count: { select: { steps: true } } },
+      });
+
+      scopeDocuments = await prisma.scopeDocument.findMany({
+        where: { engagementId: params.id },
+        orderBy: { createdAt: "desc" },
       });
     }
 
@@ -255,6 +261,7 @@ export default async function EngagementDetailPage({
                 : null
             }
             scopeAlerts={engagement.scopeAlerts || []}
+            scopeDocuments={scopeDocuments}
           />
         </TabsContent>
 

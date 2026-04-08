@@ -36,8 +36,12 @@ import {
   CheckCircle,
   Clock,
   DollarSign,
+  FileText,
+  Loader2,
   Plus,
+  Trash2,
   TrendingUp,
+  Upload,
   XCircle,
 } from "lucide-react";
 
@@ -82,6 +86,31 @@ interface ScopeAlertData {
   resolvedAt: string | null;
   resolutionNote: string | null;
   createdAt: string;
+}
+
+interface ScopeDocumentData {
+  id: string;
+  fileName: string;
+  fileType: string;
+  fileSizeBytes: number | null;
+  status: string;
+  errorMessage: string | null;
+  createdAt: string;
+}
+
+const FILE_TYPE_LABELS: Record<string, string> = {
+  "application/pdf": "PDF",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "DOCX",
+  "text/plain": "TXT",
+  "text/markdown": "MD",
+  "text/csv": "CSV",
+};
+
+function formatFileSize(bytes: number | null): string {
+  if (!bytes) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 const RATE_TIER_LABELS: Record<string, string> = {
@@ -565,14 +594,204 @@ function ScopeAlertCard({
   );
 }
 
+function ScopeDocumentsCard({
+  engagementId,
+  documents,
+}: {
+  engagementId: string;
+  documents: ScopeDocumentData[];
+}) {
+  const router = useRouter();
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
+
+  async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploading(true);
+    setUploadError(null);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const res = await fetch(
+        `/api/engagements/${engagementId}/scope-documents`,
+        { method: "POST", body: formData }
+      );
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `Upload failed (${res.status})`);
+      }
+
+      router.refresh();
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Upload failed";
+      setUploadError(message);
+    } finally {
+      setUploading(false);
+      e.target.value = "";
+    }
+  }
+
+  async function handleDelete(docId: string) {
+    setDeleting(docId);
+    try {
+      const res = await fetch(
+        `/api/engagements/${engagementId}/scope-documents?documentId=${docId}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) throw new Error("Delete failed");
+      router.refresh();
+    } catch (err) {
+      console.error("Failed to delete document:", err);
+    } finally {
+      setDeleting(null);
+    }
+  }
+
+  const statusBadge: Record<string, { variant: any; label: string }> = {
+    UPLOADED: { variant: "secondary", label: "Uploaded" },
+    PARSING: { variant: "info", label: "Parsing..." },
+    PARSED: { variant: "success", label: "Parsed" },
+    FAILED: { variant: "destructive", label: "Failed" },
+  };
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-start justify-between pb-3">
+        <div>
+          <CardTitle className="text-base">Scope Documents</CardTitle>
+          <CardDescription>
+            Upload SOWs, proposals, contracts, or other scope documents.
+            Supported: PDF, DOCX, TXT, MD, CSV.
+          </CardDescription>
+        </div>
+        <div>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={uploading}
+            onClick={() =>
+              document.getElementById(`scope-doc-upload-${engagementId}`)?.click()
+            }
+          >
+            {uploading ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Uploading...
+              </>
+            ) : (
+              <>
+                <Upload className="mr-2 h-4 w-4" />
+                Upload File
+              </>
+            )}
+          </Button>
+          <input
+            id={`scope-doc-upload-${engagementId}`}
+            type="file"
+            className="hidden"
+            accept=".pdf,.docx,.txt,.md,.csv"
+            onChange={handleUpload}
+          />
+        </div>
+      </CardHeader>
+      <CardContent>
+        {uploadError && (
+          <p className="text-sm text-red-600 mb-3">{uploadError}</p>
+        )}
+        {documents.length === 0 ? (
+          <div
+            className="border-2 border-dashed rounded-lg p-8 text-center cursor-pointer hover:border-primary/50 transition-colors"
+            onClick={() =>
+              document.getElementById(`scope-doc-upload-${engagementId}`)?.click()
+            }
+          >
+            <FileText className="mx-auto h-8 w-8 text-muted-foreground mb-2" />
+            <p className="text-sm text-muted-foreground">
+              Drop a file here or click to upload
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">
+              PDF, DOCX, TXT, MD, CSV
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {documents.map((doc) => {
+              const badge = statusBadge[doc.status] || statusBadge.UPLOADED;
+              return (
+                <div
+                  key={doc.id}
+                  className="flex items-center justify-between rounded-lg border p-3 group"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <FileText className="h-5 w-5 text-muted-foreground shrink-0" />
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium truncate">
+                        {doc.fileName}
+                      </p>
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <span>
+                          {FILE_TYPE_LABELS[doc.fileType] || doc.fileType}
+                        </span>
+                        {doc.fileSizeBytes && (
+                          <span>{formatFileSize(doc.fileSizeBytes)}</span>
+                        )}
+                        <span>
+                          {new Date(doc.createdAt).toLocaleDateString("en-US", {
+                            month: "short",
+                            day: "numeric",
+                          })}
+                        </span>
+                      </div>
+                      {doc.errorMessage && (
+                        <p className="text-xs text-red-600 mt-0.5">
+                          {doc.errorMessage}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Badge variant={badge.variant}>{badge.label}</Badge>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 w-7 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                      onClick={() => handleDelete(doc.id)}
+                      disabled={deleting === doc.id}
+                    >
+                      {deleting === doc.id ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <Trash2 className="h-3 w-3 text-muted-foreground" />
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export function ScopeTab({
   engagementId,
   sow,
   scopeAlerts,
+  scopeDocuments = [],
 }: {
   engagementId: string;
   sow: SOWData | null;
   scopeAlerts: ScopeAlertData[];
+  scopeDocuments?: ScopeDocumentData[];
 }) {
   const openAlerts = scopeAlerts.filter(
     (a) => a.status === "OPEN" || a.status === "ACKNOWLEDGED"
@@ -583,24 +802,31 @@ export function ScopeTab({
 
   if (!sow) {
     return (
-      <Card>
-        <CardHeader className="flex flex-row items-start justify-between">
-          <div>
-            <CardTitle>Scope Tracking</CardTitle>
-            <CardDescription>
-              Attach a Statement of Work to track scope, hours, and budget
-              against this engagement.
-            </CardDescription>
-          </div>
-          <AddSOWDialog engagementId={engagementId} />
-        </CardHeader>
-        <CardContent>
-          <p className="text-sm text-muted-foreground py-8 text-center">
-            No SOW attached yet. Add one to enable scope tracking and automatic
-            scope creep alerts.
-          </p>
-        </CardContent>
-      </Card>
+      <div className="space-y-4">
+        <Card>
+          <CardHeader className="flex flex-row items-start justify-between">
+            <div>
+              <CardTitle>Scope Tracking</CardTitle>
+              <CardDescription>
+                Attach a Statement of Work to track scope, hours, and budget
+                against this engagement.
+              </CardDescription>
+            </div>
+            <AddSOWDialog engagementId={engagementId} />
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground py-8 text-center">
+              No SOW attached yet. Add one to enable scope tracking and automatic
+              scope creep alerts.
+            </p>
+          </CardContent>
+        </Card>
+
+        <ScopeDocumentsCard
+          engagementId={engagementId}
+          documents={scopeDocuments}
+        />
+      </div>
     );
   }
 
@@ -849,6 +1075,12 @@ export function ScopeTab({
           </CardContent>
         </Card>
       )}
+
+      {/* Scope Documents */}
+      <ScopeDocumentsCard
+        engagementId={engagementId}
+        documents={scopeDocuments}
+      />
     </div>
   );
 }
