@@ -17,14 +17,21 @@ function getHeaders(): Record<string, string> {
 export interface RecallBotConfig {
   meeting_url: string;
   bot_name?: string;
-  transcription_options?: {
-    provider?: string;
+  recording_config?: {
+    transcript?: {
+      provider?: {
+        recallai_streaming?: {
+          mode?: "prioritize_low_latency" | "prioritize_accuracy";
+        };
+        meeting_captions?: Record<string, never>;
+      };
+    };
+    realtime_endpoints?: Array<{
+      type: "webhook";
+      url: string;
+      events: string[];
+    }>;
   };
-  real_time_transcription?: {
-    destination_url: string;
-    partial_results?: boolean;
-  };
-  recording_mode?: "speaker_view" | "gallery_view" | "audio_only";
   output_media?: {
     camera?: {
       kind: "webpage";

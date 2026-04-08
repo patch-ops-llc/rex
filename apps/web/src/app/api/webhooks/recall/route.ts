@@ -17,6 +17,14 @@ export async function POST(request: NextRequest) {
         await handleStatusChange(data);
         break;
 
+      case "transcript.data":
+        await handleRealtimeTranscript(data, true);
+        break;
+
+      case "transcript.partial_data":
+        await handleRealtimeTranscript(data, false);
+        break;
+
       case "bot.transcription":
       case "transcript.realtime":
         await handleTranscription(data);
@@ -88,6 +96,80 @@ async function handleStatusChange(data: any) {
     );
   } catch {
     // Redis unavailable — non-fatal
+  }
+}
+
+async function handleRealtimeTranscript(data: any, isFinal: boolean) {
+  const botId = data?.bot?.id;
+  if (!botId) return;
+
+  const call = await prisma.discoveryCall.findFirst({
+    where: { recallBotId: botId },
+  });
+  if (!call) return;
+
+  const entry = data?.data;
+  if (!entry?.words?.length) return;
+
+  const text = entry.words.map((w: any) => w.text).join(" ");
+  const startTime = entry.words[0]?.start_timestamp?.relative ?? 0;
+  const endTime =
+    entry.words[entry.words.length - 1]?.end_timestamp?.relative ?? startTime;
+  const speaker = entry.participant?.name || "Unknown";
+
+  const segment = await prisma.transcriptSegment.create({
+    data: {
+      discoveryCallId: call.id,
+      speaker,
+      text,
+      startTime,
+      endTime,
+      confidence: 1,
+      isFinal,
+    },
+  });
+
+  try {
+    const redis = getRedis();
+    await redis.publish(
+      `rex:call:${call.id}:events`,
+      JSON.stringify({
+        type: "transcript",
+        segment: {
+          id: segment.id,
+          speaker: segment.speaker,
+          text: segment.text,
+          startTime: segment.startTime,
+          endTime: segment.endTime,
+          isFinal: segment.isFinal,
+        },
+      })
+    );
+  } catch {
+    // Redis unavailable — non-fatal
+  }
+
+  if (!isFinal) return;
+
+  const now = new Date();
+  const lastProcessed = call.lastProcessedAt;
+  const secondsSinceLastProcess = lastProcessed
+    ? (now.getTime() - lastProcessed.getTime()) / 1000
+    : Infinity;
+
+  if (secondsSinceLastProcess >= PROCESS_INTERVAL_SECONDS) {
+    await prisma.discoveryCall.update({
+      where: { id: call.id },
+      data: { lastProcessedAt: now },
+    });
+
+    const appUrl = (process.env.WEB_URL || "").replace(/\/+$/, "");
+    if (appUrl) {
+      fetch(
+        `${appUrl}/api/engagements/${call.engagementId}/discovery/${call.id}/process`,
+        { method: "POST" }
+      ).catch((err) => console.error("Failed to trigger processing:", err));
+    }
   }
 }
 

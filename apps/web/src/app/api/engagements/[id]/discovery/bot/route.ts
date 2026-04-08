@@ -60,14 +60,22 @@ export async function POST(
     const botConfig: Parameters<typeof createBot>[0] = {
       meeting_url: meetingUrl,
       bot_name: "Rex",
-      transcription_options: {
-        provider: "meeting_captions",
+      recording_config: {
+        transcript: {
+          provider: {
+            recallai_streaming: {
+              mode: "prioritize_low_latency",
+            },
+          },
+        },
+        realtime_endpoints: [
+          {
+            type: "webhook",
+            url: `${appUrl}/api/webhooks/recall`,
+            events: ["transcript.data", "transcript.partial_data"],
+          },
+        ],
       },
-      real_time_transcription: {
-        destination_url: `${appUrl}/api/webhooks/recall`,
-        partial_results: true,
-      },
-      recording_mode: "audio_only",
     };
 
     if (displayUrl) {
