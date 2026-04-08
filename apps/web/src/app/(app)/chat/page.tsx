@@ -1,10 +1,31 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback, type FormEvent } from "react";
+import {
+  useState,
+  useRef,
+  useEffect,
+  useCallback,
+  type FormEvent,
+} from "react";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
-import { SendHorizontal, Bot, User, Loader2, RotateCcw, Wrench } from "lucide-react";
+import {
+  SendHorizontal,
+  Bot,
+  User,
+  Loader2,
+  Plus,
+  Wrench,
+  MessageSquare,
+  Trash2,
+  PanelLeftClose,
+  PanelLeft,
+} from "lucide-react";
+import { MarkdownContent } from "@/components/chat/markdown-content";
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
 interface ToolActivity {
   name: string;
@@ -18,12 +39,37 @@ interface Message {
   toolActivity?: ToolActivity[];
 }
 
+interface SessionSummary {
+  id: string;
+  title: string;
+  updatedAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// Main Page
+// ---------------------------------------------------------------------------
+
 export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(true);
+  const [loadingSessions, setLoadingSessions] = useState(true);
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Accumulator refs for smooth streaming
+  const accumulatedRef = useRef("");
+  const toolsRef = useRef<ToolActivity[]>([]);
+  const rafRef = useRef<number | null>(null);
+  const activeAssistantIdRef = useRef<string | null>(null);
+
+  // -----------------------------------------------------------------------
+  // Scroll
+  // -----------------------------------------------------------------------
 
   const scrollToBottom = useCallback(() => {
     if (scrollRef.current) {
@@ -35,6 +81,7 @@ export default function ChatPage() {
     scrollToBottom();
   }, [messages, scrollToBottom]);
 
+  // Auto-resize textarea
   useEffect(() => {
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
@@ -43,10 +90,98 @@ export default function ChatPage() {
     }
   }, [input]);
 
+  // -----------------------------------------------------------------------
+  // Session management
+  // -----------------------------------------------------------------------
+
+  const loadSessions = useCallback(async () => {
+    try {
+      const res = await fetch("/api/chat/sessions");
+      if (res.ok) {
+        const data = await res.json();
+        setSessions(data);
+      }
+    } catch {
+      // silently fail
+    } finally {
+      setLoadingSessions(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadSessions();
+  }, [loadSessions]);
+
+  async function loadSession(id: string) {
+    if (isStreaming) return;
+    try {
+      const res = await fetch(`/api/chat/sessions/${id}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setSessionId(id);
+      setMessages(
+        data.messages.map((m: { id: string; role: string; content: string; toolActivity?: unknown }) => ({
+          id: m.id,
+          role: m.role as "user" | "assistant",
+          content: m.content,
+          toolActivity: m.toolActivity as ToolActivity[] | undefined,
+        }))
+      );
+    } catch {
+      // silently fail
+    }
+  }
+
+  async function deleteSession(id: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    try {
+      await fetch(`/api/chat/sessions/${id}`, { method: "DELETE" });
+      setSessions((prev) => prev.filter((s) => s.id !== id));
+      if (sessionId === id) {
+        setSessionId(null);
+        setMessages([]);
+      }
+    } catch {
+      // silently fail
+    }
+  }
+
+  function handleNewChat() {
+    if (isStreaming) return;
+    setSessionId(null);
+    setMessages([]);
+    setInput("");
+    textareaRef.current?.focus();
+  }
+
+  // -----------------------------------------------------------------------
+  // Streaming submit
+  // -----------------------------------------------------------------------
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     const text = input.trim();
     if (!text || isStreaming) return;
+
+    let currentSessionId = sessionId;
+
+    // Create session on first message
+    if (!currentSessionId) {
+      try {
+        const res = await fetch("/api/chat/sessions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          currentSessionId = data.id;
+          setSessionId(data.id);
+        }
+      } catch {
+        // continue without persistence
+      }
+    }
 
     const userMessage: Message = {
       id: crypto.randomUUID(),
@@ -59,6 +194,10 @@ export default function ChatPage() {
       role: "assistant",
       content: "",
     };
+
+    activeAssistantIdRef.current = assistantMessage.id;
+    accumulatedRef.current = "";
+    toolsRef.current = [];
 
     const updatedMessages = [...messages, userMessage];
     setMessages([...updatedMessages, assistantMessage]);
@@ -74,6 +213,7 @@ export default function ChatPage() {
             role: m.role,
             content: m.content,
           })),
+          sessionId: currentSessionId,
         }),
       });
 
@@ -98,8 +238,23 @@ export default function ChatPage() {
         return;
       }
 
-      let accumulated = "";
-      let tools: ToolActivity[] = [];
+      // Flush accumulated state into React on animation frame
+      const scheduleFlush = () => {
+        if (rafRef.current) return;
+        rafRef.current = requestAnimationFrame(() => {
+          rafRef.current = null;
+          const aid = activeAssistantIdRef.current;
+          const text = accumulatedRef.current;
+          const tools = [...toolsRef.current];
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === aid
+                ? { ...m, content: text, toolActivity: tools.length > 0 ? tools : undefined }
+                : m
+            )
+          );
+        });
+      };
 
       while (true) {
         const { done, value } = await reader.read();
@@ -116,16 +271,16 @@ export default function ChatPage() {
           try {
             const parsed = JSON.parse(data);
             if (parsed.error) {
-              accumulated += `\n\nError: ${parsed.error}`;
+              accumulatedRef.current += `\n\nError: ${parsed.error}`;
             } else if (parsed.text) {
-              accumulated += parsed.text;
+              accumulatedRef.current += parsed.text;
             } else if (parsed.tool_use) {
               const { name, status } = parsed.tool_use;
-              const existing = tools.find((t) => t.name === name);
+              const existing = toolsRef.current.find((t) => t.name === name);
               if (existing) {
                 existing.status = status;
               } else {
-                tools = [...tools, { name, status }];
+                toolsRef.current = [...toolsRef.current, { name, status }];
               }
             }
           } catch {
@@ -133,14 +288,23 @@ export default function ChatPage() {
           }
         }
 
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantMessage.id
-              ? { ...m, content: accumulated, toolActivity: tools.length > 0 ? [...tools] : undefined }
-              : m
-          )
-        );
+        scheduleFlush();
       }
+
+      // Final flush to ensure everything is rendered
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      const finalText = accumulatedRef.current;
+      const finalTools = [...toolsRef.current];
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantMessage.id
+            ? { ...m, content: finalText, toolActivity: finalTools.length > 0 ? finalTools : undefined }
+            : m
+        )
+      );
     } catch (err) {
       setMessages((prev) =>
         prev.map((m) =>
@@ -154,6 +318,8 @@ export default function ChatPage() {
       );
     } finally {
       setIsStreaming(false);
+      activeAssistantIdRef.current = null;
+      loadSessions();
     }
   }
 
@@ -164,88 +330,168 @@ export default function ChatPage() {
     }
   }
 
-  function handleReset() {
-    setMessages([]);
-    setInput("");
-  }
+  // -----------------------------------------------------------------------
+  // Render
+  // -----------------------------------------------------------------------
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between pb-4">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Chat with Rex</h1>
-          <p className="text-muted-foreground">
-            Ask questions about what Rex knows from the training corpus.
-          </p>
-        </div>
-        {messages.length > 0 && (
-          <Button variant="outline" size="sm" onClick={handleReset}>
-            <RotateCcw className="mr-2 h-3.5 w-3.5" />
-            New conversation
-          </Button>
+    <div className="flex -m-6" style={{ height: "calc(100% + 3rem)" }}>
+      {/* ---- History sidebar ---- */}
+      <div
+        className={cn(
+          "flex flex-col border-r bg-muted/30 transition-all duration-200 shrink-0",
+          historyOpen ? "w-72" : "w-0 overflow-hidden border-r-0"
         )}
+      >
+        <div className="flex items-center justify-between px-4 py-3 border-b">
+          <h2 className="text-sm font-semibold text-foreground">History</h2>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={handleNewChat}
+            title="New conversation"
+          >
+            <Plus className="h-4 w-4" />
+          </Button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto">
+          {loadingSessions ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            </div>
+          ) : sessions.length === 0 ? (
+            <p className="px-4 py-6 text-xs text-muted-foreground text-center">
+              No conversations yet
+            </p>
+          ) : (
+            <div className="py-1">
+              {sessions.map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => loadSession(s.id)}
+                  className={cn(
+                    "group flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm transition-colors",
+                    sessionId === s.id
+                      ? "bg-primary/10 text-primary"
+                      : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                  )}
+                >
+                  <MessageSquare className="h-3.5 w-3.5 shrink-0" />
+                  <span className="flex-1 truncate">{s.title}</span>
+                  <button
+                    onClick={(e) => deleteSession(s.id, e)}
+                    className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-destructive/10 hover:text-destructive"
+                    title="Delete conversation"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
-      <Card className="flex flex-1 flex-col overflow-hidden">
-        <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4">
-          {messages.length === 0 ? (
-            <EmptyState onSuggestion={(text) => setInput(text)} />
-          ) : (
-            messages.map((message) => (
-              <ChatBubble
-                key={message.id}
-                message={message}
-                isStreaming={
-                  isStreaming &&
-                  message.role === "assistant" &&
-                  message === messages[messages.length - 1]
-                }
-              />
-            ))
+      {/* ---- Main chat area ---- */}
+      <div className="flex flex-1 flex-col min-w-0">
+        {/* Top bar */}
+        <div className="flex items-center gap-2 px-4 py-3 border-b bg-background">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={() => setHistoryOpen(!historyOpen)}
+            title={historyOpen ? "Close history" : "Open history"}
+          >
+            {historyOpen ? (
+              <PanelLeftClose className="h-4 w-4" />
+            ) : (
+              <PanelLeft className="h-4 w-4" />
+            )}
+          </Button>
+          <div className="flex-1 min-w-0">
+            <h1 className="text-lg font-semibold truncate">
+              {sessionId
+                ? sessions.find((s) => s.id === sessionId)?.title || "Chat"
+                : "New conversation"}
+            </h1>
+          </div>
+          {messages.length > 0 && (
+            <Button variant="outline" size="sm" onClick={handleNewChat}>
+              <Plus className="mr-1.5 h-3.5 w-3.5" />
+              New
+            </Button>
           )}
         </div>
 
-        <form
-          onSubmit={handleSubmit}
-          className="border-t bg-background/95 backdrop-blur p-4"
-        >
-          <div className="flex items-end gap-2">
-            <textarea
-              ref={textareaRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Ask Rex something..."
-              rows={1}
-              disabled={isStreaming}
-              className={cn(
-                "flex-1 resize-none rounded-lg border border-input bg-background px-4 py-3 text-sm",
-                "ring-offset-background placeholder:text-muted-foreground",
-                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-                "disabled:cursor-not-allowed disabled:opacity-50"
-              )}
-            />
-            <Button
-              type="submit"
-              size="icon"
-              disabled={!input.trim() || isStreaming}
-              className="h-11 w-11 shrink-0"
-            >
-              {isStreaming ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <SendHorizontal className="h-4 w-4" />
-              )}
-            </Button>
-          </div>
-          <p className="mt-2 text-xs text-muted-foreground">
-            Rex answers based on its ingested corpus. Press Enter to send, Shift+Enter for new line.
-          </p>
-        </form>
-      </Card>
+        {/* Messages area */}
+        <div ref={scrollRef} className="flex-1 overflow-y-auto">
+          {messages.length === 0 ? (
+            <EmptyState onSuggestion={(text) => setInput(text)} />
+          ) : (
+            <div className="max-w-3xl mx-auto px-4 py-6 space-y-6">
+              {messages.map((message) => (
+                <ChatBubble
+                  key={message.id}
+                  message={message}
+                  isStreaming={
+                    isStreaming &&
+                    message.role === "assistant" &&
+                    message === messages[messages.length - 1]
+                  }
+                />
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Input area */}
+        <div className="border-t bg-background/95 backdrop-blur px-4 py-3">
+          <form onSubmit={handleSubmit} className="max-w-3xl mx-auto">
+            <div className="flex items-end gap-2 rounded-xl border border-input bg-background p-1.5 focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 ring-offset-background transition-shadow">
+              <textarea
+                ref={textareaRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="Ask Rex something..."
+                rows={1}
+                disabled={isStreaming}
+                className={cn(
+                  "flex-1 resize-none bg-transparent px-3 py-2 text-sm",
+                  "placeholder:text-muted-foreground",
+                  "focus:outline-none",
+                  "disabled:cursor-not-allowed disabled:opacity-50"
+                )}
+              />
+              <Button
+                type="submit"
+                size="icon"
+                disabled={!input.trim() || isStreaming}
+                className="h-9 w-9 shrink-0 rounded-lg"
+              >
+                {isStreaming ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <SendHorizontal className="h-4 w-4" />
+                )}
+              </Button>
+            </div>
+            <p className="mt-1.5 text-[11px] text-muted-foreground text-center">
+              Enter to send, Shift+Enter for new line
+            </p>
+          </form>
+        </div>
+      </div>
     </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Empty State
+// ---------------------------------------------------------------------------
 
 function EmptyState({ onSuggestion }: { onSuggestion: (text: string) => void }) {
   const suggestions = [
@@ -256,15 +502,15 @@ function EmptyState({ onSuggestion }: { onSuggestion: (text: string) => void }) 
   ];
 
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-6 text-center py-12">
-      <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/10">
-        <Bot className="h-8 w-8 text-primary" />
+    <div className="flex h-full flex-col items-center justify-center gap-6 text-center py-12 px-4">
+      <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10">
+        <Bot className="h-7 w-7 text-primary" />
       </div>
-      <div className="space-y-2">
-        <h2 className="text-xl font-semibold">What would you like to know?</h2>
+      <div className="space-y-1.5">
+        <h2 className="text-xl font-semibold">What can I help with?</h2>
         <p className="text-sm text-muted-foreground max-w-md">
-          Rex can answer questions based on the training corpus — discovery calls,
-          project documentation, implementation notes, and more.
+          Ask about discovery calls, project patterns, implementation details,
+          or anything in the corpus.
         </p>
       </div>
       <div className="grid gap-2 sm:grid-cols-2 max-w-lg w-full">
@@ -285,6 +531,10 @@ function EmptyState({ onSuggestion }: { onSuggestion: (text: string) => void }) 
   );
 }
 
+// ---------------------------------------------------------------------------
+// Tool labels
+// ---------------------------------------------------------------------------
+
 const TOOL_LABELS: Record<string, string> = {
   slack_list_workspaces: "Listing Slack workspaces",
   slack_list_channels: "Listing channels",
@@ -297,6 +547,10 @@ const TOOL_LABELS: Record<string, string> = {
   slack_list_users: "Listing users",
 };
 
+// ---------------------------------------------------------------------------
+// Chat Bubble
+// ---------------------------------------------------------------------------
+
 function ChatBubble({
   message,
   isStreaming,
@@ -307,16 +561,28 @@ function ChatBubble({
   const isUser = message.role === "user";
   const hasActiveTools = message.toolActivity?.some((t) => t.status !== "done");
 
-  return (
-    <div
-      className={cn("flex gap-3", isUser ? "justify-end" : "justify-start")}
-    >
-      {!isUser && (
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 mt-0.5">
-          <Bot className="h-4 w-4 text-primary" />
+  if (isUser) {
+    return (
+      <div className="flex gap-3 justify-end">
+        <div className="max-w-[75%]">
+          <div className="rounded-2xl rounded-br-md bg-primary text-primary-foreground px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap">
+            {message.content}
+          </div>
         </div>
-      )}
-      <div className="max-w-[75%] space-y-2">
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-secondary mt-0.5">
+          <User className="h-4 w-4" />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex gap-3 justify-start">
+      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 mt-0.5">
+        <Bot className="h-4 w-4 text-primary" />
+      </div>
+      <div className="flex-1 min-w-0 max-w-[85%] space-y-2">
+        {/* Tool activity badges */}
         {message.toolActivity && message.toolActivity.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
             {message.toolActivity.map((tool) => (
@@ -339,32 +605,27 @@ function ChatBubble({
             ))}
           </div>
         )}
-        <div
-          className={cn(
-            "rounded-xl px-4 py-3 text-sm leading-relaxed",
-            isUser
-              ? "bg-primary text-primary-foreground"
-              : "bg-muted"
-          )}
-        >
+
+        {/* Message content */}
+        <div className="text-sm leading-relaxed">
           {isStreaming && !message.content && !hasActiveTools ? (
-            <div className="flex items-center gap-1.5">
-              <div className="h-1.5 w-1.5 rounded-full bg-current animate-bounce" style={{ animationDelay: "0ms" }} />
-              <div className="h-1.5 w-1.5 rounded-full bg-current animate-bounce" style={{ animationDelay: "150ms" }} />
-              <div className="h-1.5 w-1.5 rounded-full bg-current animate-bounce" style={{ animationDelay: "300ms" }} />
+            <div className="flex items-center gap-1 py-2">
+              <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60 animate-bounce" style={{ animationDelay: "0ms" }} />
+              <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60 animate-bounce" style={{ animationDelay: "150ms" }} />
+              <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60 animate-bounce" style={{ animationDelay: "300ms" }} />
             </div>
           ) : isStreaming && !message.content && hasActiveTools ? (
-            <p className="text-muted-foreground italic text-xs">Working with Slack...</p>
+            <p className="text-muted-foreground italic text-xs py-1">
+              Working with Slack...
+            </p>
           ) : message.content ? (
-            <div className="whitespace-pre-wrap">{message.content}</div>
+            <MarkdownContent content={message.content} />
           ) : null}
+          {isStreaming && message.content && (
+            <span className="inline-block w-0.5 h-4 bg-primary/60 animate-pulse ml-0.5 align-text-bottom" />
+          )}
         </div>
       </div>
-      {isUser && (
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-secondary mt-0.5">
-          <User className="h-4 w-4" />
-        </div>
-      )}
     </div>
   );
 }

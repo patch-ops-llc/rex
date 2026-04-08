@@ -36,12 +36,34 @@ export async function POST(request: NextRequest) {
 
   const body = await request.json();
   const messages: Anthropic.MessageParam[] = body.messages ?? [];
+  const sessionId: string | undefined = body.sessionId;
 
   if (!messages.length) {
     return new Response(
       JSON.stringify({ error: "messages array is required" }),
       { status: 400, headers: { "Content-Type": "application/json" } }
     );
+  }
+
+  // Save user message to DB if we have a session
+  const lastUserMsg = messages[messages.length - 1];
+  if (sessionId && lastUserMsg?.role === "user") {
+    const content =
+      typeof lastUserMsg.content === "string"
+        ? lastUserMsg.content
+        : Array.isArray(lastUserMsg.content)
+          ? lastUserMsg.content
+              .filter((b): b is Anthropic.TextBlockParam => b.type === "text")
+              .map((b) => b.text)
+              .join("")
+          : "";
+    try {
+      await prisma.chatMessage.create({
+        data: { sessionId, role: "user", content },
+      });
+    } catch (err) {
+      console.error("Failed to save user message:", err);
+    }
   }
 
   let corpusContext = "";
@@ -85,33 +107,40 @@ export async function POST(request: NextRequest) {
 
   const hasSlack = slackWorkspaceCount > 0;
 
-  const systemPrompt = `You are REX, PatchOps' AI assistant for RevOps consulting. You have deep knowledge about CRM implementations, system integrations, HubSpot, and business automation.
+  const systemPrompt = `You are REX, PatchOps' AI consulting partner — an expert in RevOps strategy, CRM architecture, system integrations, and business automation.
 
-Your knowledge comes from a corpus of discovery call transcripts, project documentation, implementation notes, and other consulting artifacts that PatchOps has accumulated. Use this knowledge to answer questions accurately and helpfully.
+Your voice is authoritative yet conversational. You think in structured layers — surfacing the strategic "why" before diving into the tactical "how." You draw on real project experience, name specific patterns and tools where relevant, and aren't afraid to flag trade-offs or push back when something doesn't add up.
 
-${hasSlack ? `You have access to ${slackWorkspaceCount} connected Slack workspace${slackWorkspaceCount > 1 ? "s" : ""}. You can use the Slack tools to:
+## Response Style
+
+- **Use rich markdown formatting.** Structure your responses with headers, bullet points, numbered lists, bold emphasis, and code blocks where appropriate. This makes your answers scannable and professional.
+- **Lead with insight, not preamble.** Skip generic intros like "Great question!" — get to the substance.
+- **Be specific.** Reference corpus entries by name, cite concrete patterns, and give actionable detail. Vague advice is noise.
+- **Think in frameworks.** When analyzing a problem, break it into clear dimensions — technical feasibility, business impact, implementation complexity, risk.
+- **Use code blocks** for technical examples, field mappings, API patterns, or configuration snippets. Label them with the language.
+- **Signal confidence levels.** If something is directly supported by the corpus, say so. If you're extrapolating or reasoning from general expertise, make that clear too.
+- **Keep paragraphs tight** — 2-3 sentences max. Dense walls of text are harder to parse than well-structured sections.
+
+${hasSlack ? `## Slack Integration
+
+You have access to ${slackWorkspaceCount} connected Slack workspace${slackWorkspaceCount > 1 ? "s" : ""}. Available capabilities:
 - List and browse channels
 - Read recent messages and threads
-- Search for messages by keyword, author, channel, or date
+- Search messages by keyword, author, channel, or date
 - Send messages and reply to threads
 - React to messages
 - Look up user profiles
 
-When the user asks about Slack conversations, messages, or wants you to interact with Slack:
-1. First use slack_list_workspaces to see available workspaces
-2. Then use the appropriate tool to fulfill the request
-3. Summarize what you found in a clear, helpful way
+When interacting with Slack:
+1. First use \`slack_list_workspaces\` to see available workspaces
+2. Use the appropriate tool to fulfill the request
+3. Summarize findings in a clear, structured way
 
-Be thoughtful about sending messages — always confirm with the user before posting unless they explicitly asked you to send something specific.` : ""}
+**Always confirm with the user before sending messages** unless they explicitly asked you to send something specific.` : ""}
 
-When answering:
-- Reference specific corpus entries when relevant (by name)
-- Be specific about technical details, patterns, and approaches you've seen in the corpus
-- If you don't have enough information in the corpus to answer definitively, say so clearly
-- Synthesize insights across multiple corpus entries when appropriate
-- Maintain a professional but approachable consulting tone
+## Knowledge Base
 
-${corpusContext ? `Below is your current corpus of knowledge:\n\n${corpusContext}` : "Note: The corpus is currently empty. No training data has been ingested yet. Let the user know they should add corpus entries via the Corpus page before you can provide knowledge-based answers."}`;
+${corpusContext ? `Below is your current corpus of consulting knowledge — discovery calls, project documentation, implementation notes, and artifacts from real engagements:\n\n${corpusContext}` : "The corpus is currently empty. No training data has been ingested yet. Let the user know they can add corpus entries via the Corpus page to unlock knowledge-based answers."}`;
 
   const client = new Anthropic({ apiKey });
   const tools = hasSlack ? getSlackToolDefinitions() : [];
@@ -120,6 +149,8 @@ ${corpusContext ? `Below is your current corpus of knowledge:\n\n${corpusContext
 
   const readable = new ReadableStream({
     async start(controller) {
+      let fullAssistantResponse = "";
+
       try {
         const conversationMessages: Anthropic.MessageParam[] = messages.map(
           (m) => ({
@@ -135,7 +166,7 @@ ${corpusContext ? `Below is your current corpus of knowledge:\n\n${corpusContext
 
           const response = await client.messages.create({
             model: "claude-sonnet-4-20250514",
-            max_tokens: 4096,
+            max_tokens: 8192,
             system: systemPrompt,
             messages: conversationMessages,
             tools: tools.length > 0 ? tools : undefined,
@@ -194,6 +225,7 @@ ${corpusContext ? `Below is your current corpus of knowledge:\n\n${corpusContext
               event.type === "content_block_delta" &&
               event.delta.type === "text_delta"
             ) {
+              fullAssistantResponse += event.delta.text;
               controller.enqueue(
                 encoder.encode(
                   `data: ${JSON.stringify({ text: event.delta.text })}\n\n`
@@ -247,6 +279,43 @@ ${corpusContext ? `Below is your current corpus of knowledge:\n\n${corpusContext
             role: "user",
             content: toolResultContent,
           });
+        }
+
+        // Save assistant response to DB
+        if (sessionId && fullAssistantResponse) {
+          try {
+            await prisma.chatMessage.create({
+              data: {
+                sessionId,
+                role: "assistant",
+                content: fullAssistantResponse,
+              },
+            });
+
+            // Auto-title the session from first user message if untitled
+            const session = await prisma.chatSession.findUnique({
+              where: { id: sessionId },
+              select: { title: true },
+            });
+            if (!session?.title) {
+              const firstMsg = await prisma.chatMessage.findFirst({
+                where: { sessionId, role: "user" },
+                orderBy: { createdAt: "asc" },
+              });
+              if (firstMsg) {
+                const autoTitle =
+                  firstMsg.content.length > 60
+                    ? firstMsg.content.slice(0, 57) + "..."
+                    : firstMsg.content;
+                await prisma.chatSession.update({
+                  where: { id: sessionId },
+                  data: { title: autoTitle },
+                });
+              }
+            }
+          } catch (err) {
+            console.error("Failed to save assistant message:", err);
+          }
         }
 
         controller.enqueue(encoder.encode("data: [DONE]\n\n"));

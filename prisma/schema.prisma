@@ -20,7 +20,7 @@ model Engagement {
   industry        String?
   hubspotTier     String?
   hubspotPortalId String?
-  hubspotToken    String?
+  hubspotPortal   HubSpotPortal?   @relation(fields: [hubspotPortalId], references: [id], onDelete: SetNull)
   status          EngagementStatus @default(CREATED)
   embedding       Unsupported("vector(1536)")?
   createdAt       DateTime         @default(now())
@@ -35,6 +35,13 @@ model Engagement {
   workRequests       WorkRequest[]
   slackMapping       ClientSlackMapping?
   emailMapping       ClientEmailMapping?
+  sow                SOW?
+  scopeAlerts        ScopeAlert[]
+  phases             ProjectPhase[]
+  tasks              ProjectTask[]
+  requirementItems   RequirementItem[]
+  uatItems           UATItem[]
+  deliveryLog        DeliveryLogEntry[]
 }
 
 enum EngagementStatus {
@@ -61,6 +68,8 @@ model DiscoveryCall {
   meetingUrl     String?
   recallBotId    String?
   sessionId      String?    @unique
+  platform       String?
+  title          String?
   status         CallStatus @default(SCHEDULED)
   autonomyLevel  Int        @default(1)
   rawTranscript  Json?
@@ -69,8 +78,63 @@ model DiscoveryCall {
   summary        String?
   speakerProfiles Json?
   duration       Int?
+  startedAt      DateTime?
+  endedAt        DateTime?
+  lastProcessedAt DateTime?
   createdAt      DateTime   @default(now())
   updatedAt      DateTime   @updatedAt
+
+  segments       TranscriptSegment[]
+  insights       CallInsight[]
+}
+
+// ============================================================
+// REAL-TIME TRANSCRIPT SEGMENTS
+// ============================================================
+
+model TranscriptSegment {
+  id              String        @id @default(cuid())
+  discoveryCallId String
+  discoveryCall   DiscoveryCall @relation(fields: [discoveryCallId], references: [id], onDelete: Cascade)
+  speaker         String
+  text            String
+  startTime       Float
+  endTime         Float
+  confidence      Float?
+  isFinal         Boolean       @default(false)
+  createdAt       DateTime      @default(now())
+
+  @@index([discoveryCallId, startTime])
+}
+
+// ============================================================
+// AI-EXTRACTED CALL INSIGHTS
+// ============================================================
+
+model CallInsight {
+  id              String        @id @default(cuid())
+  discoveryCallId String
+  discoveryCall   DiscoveryCall @relation(fields: [discoveryCallId], references: [id], onDelete: Cascade)
+  type            InsightType
+  content         String
+  speaker         String?
+  timestamp       Float?
+  confidence      Float?
+  metadata        Json?
+  createdAt       DateTime      @default(now())
+
+  @@index([discoveryCallId, type])
+}
+
+enum InsightType {
+  REQUIREMENT
+  ACTION_ITEM
+  DECISION
+  SCOPE_CONCERN
+  SYSTEM_MENTION
+  TIMELINE
+  OPEN_QUESTION
+  STAKEHOLDER_NOTE
 }
 
 enum CallStatus {
@@ -236,6 +300,29 @@ enum WorkRequestStatus {
 }
 
 // ============================================================
+// INTERNAL CHAT SESSIONS (Rex UI)
+// ============================================================
+
+model ChatSession {
+  id        String        @id @default(cuid())
+  title     String?
+  userId    String
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  messages  ChatMessage[]
+}
+
+model ChatMessage {
+  id           String      @id @default(cuid())
+  sessionId    String
+  session      ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  role         String
+  content      String
+  toolActivity Json?
+  createdAt    DateTime    @default(now())
+}
+
+// ============================================================
 // TRAINING CORPUS
 // ============================================================
 
@@ -277,12 +364,263 @@ model SlackWorkspace {
 // ============================================================
 
 model HubSpotPortal {
-  id             String   @id @default(cuid())
+  id             String       @id @default(cuid())
   name           String
-  portalId       String   @unique
+  portalId       String       @unique
   accessToken    String
-  isActive       Boolean  @default(true)
+  isActive       Boolean      @default(true)
   lastVerifiedAt DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  engagements    Engagement[]
+}
+
+// ============================================================
+// PROJECT PIPELINE — PHASE & TASK TRACKING
+// ============================================================
+
+model ProjectPhase {
+  id             String       @id @default(cuid())
+  engagementId   String
+  engagement     Engagement   @relation(fields: [engagementId], references: [id])
+  phaseType      PhaseType
+  status         PhaseStatus  @default(NOT_STARTED)
+  displayOrder   Int
+  startedAt      DateTime?
+  completedAt    DateTime?
+  blockedReason  String?
+  outputSummary  Json?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  tasks          ProjectTask[] @relation("PhaseTasks")
+
+  @@unique([engagementId, phaseType])
+}
+
+enum PhaseType {
+  SOW_SETUP
+  DISCOVERY_PREP
+  DISCOVERY
+  REQUIREMENTS
+  BUILD_PLANNING
+  BUILD_APPROVAL
+  IMPLEMENTATION
+  HUMAN_CLEANUP
+  UAT
+  CLOSEOUT
+}
+
+enum PhaseStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  WAITING_ON_CLIENT
+  WAITING_ON_APPROVAL
+  BLOCKED
+  COMPLETED
+  SKIPPED
+}
+
+model ProjectTask {
+  id             String       @id @default(cuid())
+  engagementId   String
+  engagement     Engagement   @relation(fields: [engagementId], references: [id])
+  phaseId        String?
+  phase          ProjectPhase? @relation("PhaseTasks", fields: [phaseId], references: [id])
+  phaseType      PhaseType
+  title          String
+  description    String?
+  status         TaskStatus   @default(PENDING)
+  taskType       TaskType     @default(AUTO)
+  assignedTo     String?
+  sourceId       String?
+  sourceType     String?
+  outputData     Json?
+  errorMessage   String?
+  displayOrder   Int          @default(0)
+  dueAt          DateTime?
+  startedAt      DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+}
+
+enum TaskStatus {
+  PENDING
+  IN_PROGRESS
+  WAITING_ON_CLIENT
+  WAITING_ON_APPROVAL
+  COMPLETED
+  FAILED
+  SKIPPED
+}
+
+enum TaskType {
+  AUTO
+  HUMAN
+  CLIENT_ACTION
+  APPROVAL
+  REVIEW
+}
+
+// ============================================================
+// ASYNC REQUIREMENTS GATHERING (Client Portal)
+// ============================================================
+
+model RequirementItem {
+  id             String            @id @default(cuid())
+  engagementId   String
+  engagement     Engagement        @relation(fields: [engagementId], references: [id])
+  category       String
+  question       String
+  context        String?
+  answer         String?
+  answeredBy     String?
+  answeredAt     DateTime?
+  status         RequirementStatus @default(PENDING)
+  priority       String            @default("MEDIUM")
+  sowLineItemId  String?
+  displayOrder   Int               @default(0)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+}
+
+enum RequirementStatus {
+  PENDING
+  ANSWERED
+  CLARIFICATION_NEEDED
+  CONFIRMED
+  NOT_APPLICABLE
+}
+
+// ============================================================
+// UAT — User Acceptance Testing (Client Portal)
+// ============================================================
+
+model UATItem {
+  id             String     @id @default(cuid())
+  engagementId   String
+  engagement     Engagement @relation(fields: [engagementId], references: [id])
+  category       String
+  title          String
+  description    String
+  testSteps      String?
+  expectedResult String?
+  status         UATStatus  @default(NOT_TESTED)
+  testedBy       String?
+  testedAt       DateTime?
+  clientNotes    String?
+  linkedStepId   String?
+  displayOrder   Int        @default(0)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+}
+
+enum UATStatus {
+  NOT_TESTED
+  PASSED
+  FAILED
+  BLOCKED
+  SKIPPED
+}
+
+// ============================================================
+// DELIVERY LOG — PM Audit Trail
+// ============================================================
+
+model DeliveryLogEntry {
+  id             String     @id @default(cuid())
+  engagementId   String
+  engagement     Engagement @relation(fields: [engagementId], references: [id])
+  action         String
+  phaseType      PhaseType?
+  actor          String
+  description    String
+  metadata       Json?
+  createdAt      DateTime   @default(now())
+}
+
+// ============================================================
+// SOW & SCOPE TRACKING
+// ============================================================
+
+model SOW {
+  id             String      @id @default(cuid())
+  engagementId   String      @unique
+  engagement     Engagement  @relation(fields: [engagementId], references: [id])
+  title          String
+  version        Int         @default(1)
+  status         SOWStatus   @default(DRAFT)
+  totalBudget    Float?
+  totalHours     Float?
+  startDate      DateTime?
+  endDate        DateTime?
+  notes          String?
+  lineItems      SOWLineItem[]
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+}
+
+enum SOWStatus {
+  DRAFT
+  ACTIVE
+  AMENDED
+  COMPLETE
+  CANCELLED
+}
+
+model SOWLineItem {
+  id              String   @id @default(cuid())
+  sowId           String
+  sow             SOW      @relation(fields: [sowId], references: [id], onDelete: Cascade)
+  workstream      String
+  description     String?
+  allocatedHours  Float
+  consumedHours   Float    @default(0)
+  rateTier        String   @default("TIER_1")
+  hourlyRate      Float    @default(100)
+  displayOrder    Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model ScopeAlert {
+  id             String          @id @default(cuid())
+  engagementId   String
+  engagement     Engagement      @relation(fields: [engagementId], references: [id])
+  type           ScopeAlertType
+  severity       AlertSeverity   @default(INFO)
+  title          String
+  description    String
+  workstream     String?
+  hoursImpact    Float?
+  budgetImpact   Float?
+  sourceId       String?
+  sourceType     String?
+  status         AlertStatus     @default(OPEN)
+  resolvedBy     String?
+  resolvedAt     DateTime?
+  resolutionNote String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+}
+
+enum ScopeAlertType {
+  SCOPE_CREEP
+  OUT_OF_SCOPE
+  OVER_BUDGET
+  OVER_HOURS
+  APPROACHING_LIMIT
+}
+
+enum AlertSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+enum AlertStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+  DISMISSED
 }
