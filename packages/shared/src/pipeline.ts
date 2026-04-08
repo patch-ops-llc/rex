@@ -107,7 +107,7 @@ export async function completePhase(
     data: {
       status: "COMPLETED",
       completedAt: new Date(),
-      outputSummary: outputSummary ?? undefined,
+      outputSummary: (outputSummary as any) ?? undefined,
     },
   });
 
@@ -172,7 +172,7 @@ export async function completeTask(taskId: string, outputData?: Record<string, u
     data: {
       status: "COMPLETED",
       completedAt: new Date(),
-      outputData: outputData ?? undefined,
+      outputData: (outputData as any) ?? undefined,
     },
   });
 
@@ -331,7 +331,7 @@ async function logDelivery(
       phaseType: (phaseType as any) ?? null,
       actor,
       description,
-      metadata: metadata ?? undefined,
+      metadata: (metadata as any) ?? undefined,
     },
   });
 }
