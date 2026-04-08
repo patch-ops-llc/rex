@@ -1,0 +1,59 @@
+display_information:
+  name: Rex
+  description: AI-powered RevOps support agent by PatchOps. Ask questions about your HubSpot portal, request changes, and get instant answers 24/7.
+  background_color: "#0e2799"
+  long_description: |
+    Rex is your always-on RevOps support agent. Powered by PatchOps, Rex connects
+    directly to your HubSpot portal to answer questions, execute approved changes,
+    and proactively surface recommendations.
+
+    What Rex can do:
+    • Answer questions about your HubSpot setup — pipelines, properties, workflows, and more
+    • Execute approved work requests — property creation, workflow changes, pipeline updates
+    • Surface proactive recommendations based on portal health monitoring
+    • Provide training and enablement on anything built in your portal
+
+    All work requests go through a risk-assessed approval flow before execution,
+    so nothing changes in your portal without authorization.
+
+features:
+  app_home:
+    home_tab_enabled: true
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+  bot_user:
+    display_name: Rex
+    always_online: true
+
+oauth_config:
+  redirect_urls:
+    - https://rex-web.up.railway.app/api/slack/callback
+  scopes:
+    bot:
+      - app_mentions:read
+      - channels:history
+      - channels:read
+      - chat:write
+      - files:read
+      - files:write
+      - im:history
+      - im:read
+      - im:write
+      - commands
+      - users:read
+
+settings:
+  event_subscriptions:
+    request_url: https://rex-client-agent.up.railway.app/slack/events
+    bot_events:
+      - app_mention
+      - file_shared
+      - message.im
+      - message.channels
+      - app_home_opened
+  interactivity:
+    is_enabled: true
+    request_url: https://rex-client-agent.up.railway.app/slack/events
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false

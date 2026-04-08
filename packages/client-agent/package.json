@@ -6,13 +6,19 @@
   "types": "./src/index.ts",
   "scripts": {
     "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
     "@rex/shared": "workspace:*",
-    "@slack/bolt": "^4"
+    "@slack/bolt": "^4",
+    "mammoth": "^1.8",
+    "pdf-parse": "^1.1"
   },
   "devDependencies": {
+    "@types/pdf-parse": "^1.1",
+    "tsx": "^4",
     "typescript": "^5"
   }
 }
