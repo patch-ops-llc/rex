@@ -16,7 +16,8 @@
     "baseUrl": ".",
     "paths": {
       "@rex/shared": ["packages/shared/src"],
-      "@rex/orchestrator": ["packages/orchestrator/src"]
+      "@rex/orchestrator": ["packages/orchestrator/src"],
+      "@rex/enablement": ["packages/enablement/src"]
     }
   },
   "exclude": ["node_modules", "dist"]

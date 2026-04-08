@@ -31,6 +31,7 @@ model Engagement {
   implementations    Implementation[]
   qaItems            QAItem[]
   enablementSessions EnablementSession[]
+  walkthroughs       Walkthrough[]
   conversations      ClientConversation[]
   workRequests       WorkRequest[]
   slackMapping       ClientSlackMapping?
@@ -42,6 +43,7 @@ model Engagement {
   requirementItems   RequirementItem[]
   uatItems           UATItem[]
   deliveryLog        DeliveryLogEntry[]
+  scopeDocuments     ScopeDocument[]
 }
 
 enum EngagementStatus {
@@ -231,6 +233,52 @@ model EnablementSession {
   content      Json?
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
+}
+
+// ============================================================
+// WALKTHROUGHS — Interactive Enablement Guides
+// ============================================================
+
+model Walkthrough {
+  id             String            @id @default(cuid())
+  engagementId   String
+  engagement     Engagement        @relation(fields: [engagementId], references: [id])
+  title          String
+  description    String?
+  status         WalkthroughStatus @default(GENERATING)
+  shareToken     String            @unique @default(cuid())
+  steps          WalkthroughStep[]
+  generatedAt    DateTime?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  @@index([engagementId])
+}
+
+model WalkthroughStep {
+  id              String      @id @default(cuid())
+  walkthroughId   String
+  walkthrough     Walkthrough @relation(fields: [walkthroughId], references: [id], onDelete: Cascade)
+  stepOrder       Int
+  category        String
+  title           String
+  narration       String
+  context         String?
+  screenshotUrl   String?
+  annotations     Json?
+  linkedStepId    String?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@index([walkthroughId, stepOrder])
+}
+
+enum WalkthroughStatus {
+  GENERATING
+  CAPTURING
+  NARRATING
+  READY
+  FAILED
 }
 
 // ============================================================
@@ -521,6 +569,80 @@ enum UATStatus {
   FAILED
   BLOCKED
   SKIPPED
+}
+
+// ============================================================
+// CUSTOM PROJECTS — GitHub + Railway Pipeline
+// ============================================================
+
+model CustomProject {
+  id               String              @id @default(cuid())
+  name             String
+  description      String?
+  engagementId     String?
+  templateType     String              @default("express-integration")
+
+  // GitHub
+  githubRepo       String?             // "org/repo-name"
+  githubRepoUrl    String?
+  githubBranch     String              @default("main")
+
+  // Railway
+  railwayProjectId String?             @unique
+  railwayServiceId String?
+  railwayUrl       String?
+
+  status           ProjectDeployStatus @default(CREATED)
+  envVars          Json?               // non-secret env var config
+  scaffoldConfig   Json?               // template params (ports, db, etc.)
+  lastDeployedAt   DateTime?
+  errorMessage     String?
+
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+}
+
+enum ProjectDeployStatus {
+  CREATED
+  REPO_CREATED
+  SCAFFOLDED
+  RAILWAY_LINKED
+  DEPLOYING
+  DEPLOYED
+  DEPLOY_FAILED
+}
+
+// ============================================================
+// SCOPE DOCUMENTS — File-based scope ingestion
+// ============================================================
+
+model ScopeDocument {
+  id             String              @id @default(cuid())
+  engagementId   String
+  engagement     Engagement          @relation(fields: [engagementId], references: [id])
+  fileName       String
+  fileType       String
+  fileSizeBytes  Int?
+  slackFileId    String?             @unique
+  slackChannelId String?
+  slackUserId    String?
+  rawText        String?
+  parsedData     Json?
+  status         ScopeDocumentStatus @default(UPLOADED)
+  errorMessage   String?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  @@index([engagementId])
+}
+
+enum ScopeDocumentStatus {
+  UPLOADED
+  PARSING
+  PARSED
+  PROCESSING
+  PROCESSED
+  FAILED
 }
 
 // ============================================================

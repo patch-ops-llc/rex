@@ -7,6 +7,7 @@ import { SendBotDialog } from "@/components/discovery/send-bot-dialog";
 import { ScopeTab } from "@/components/scope-tab";
 import { PipelineView } from "@/components/pipeline-view";
 import { HubSpotConnectionCard } from "@/components/hubspot-connection-card";
+import { WalkthroughsTab } from "@/components/walkthroughs-tab";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Card,
@@ -23,6 +24,7 @@ export default async function EngagementDetailPage({
 }) {
   let engagement: any = null;
   let pipelineData: any = null;
+  let walkthroughs: any[] = [];
 
   try {
     engagement = await prisma.engagement.findUnique({
@@ -75,6 +77,14 @@ export default async function EngagementDetailPage({
         },
       },
     });
+
+    if (engagement) {
+      walkthroughs = await prisma.walkthrough.findMany({
+        where: { engagementId: params.id },
+        orderBy: { createdAt: "desc" },
+        include: { _count: { select: { steps: true } } },
+      });
+    }
 
     if (engagement?.phases?.length > 0) {
       const phases = engagement.phases;
@@ -181,6 +191,14 @@ export default async function EngagementDetailPage({
           <TabsTrigger value="build-plan">Build Plan</TabsTrigger>
           <TabsTrigger value="implementation">Implementation</TabsTrigger>
           <TabsTrigger value="qa">QA</TabsTrigger>
+          <TabsTrigger value="walkthroughs">
+            Walkthroughs
+            {walkthroughs.length > 0 && (
+              <span className="ml-1.5 text-xs text-muted-foreground">
+                ({walkthroughs.length})
+              </span>
+            )}
+          </TabsTrigger>
           <TabsTrigger value="activity">Activity</TabsTrigger>
         </TabsList>
 
@@ -477,6 +495,24 @@ export default async function EngagementDetailPage({
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+
+        {/* ── Walkthroughs Tab ────────────────────────────────────── */}
+        <TabsContent value="walkthroughs">
+          <WalkthroughsTab
+            engagementId={engagement.id}
+            hasBuildPlan={!!engagement.buildPlan}
+            initialWalkthroughs={walkthroughs.map((w: any) => ({
+              id: w.id,
+              title: w.title,
+              description: w.description,
+              status: w.status,
+              shareToken: w.shareToken,
+              generatedAt: w.generatedAt?.toISOString() ?? null,
+              createdAt: w.createdAt.toISOString(),
+              _count: w._count,
+            }))}
+          />
         </TabsContent>
 
         {/* ── Activity Log Tab ─────────────────────────────────────── */}

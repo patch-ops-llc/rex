@@ -10,7 +10,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39",
-    "@rex/shared": "workspace:*"
+    "@rex/shared": "workspace:*",
+    "playwright": "^1.52"
   },
   "devDependencies": {
     "typescript": "^5"

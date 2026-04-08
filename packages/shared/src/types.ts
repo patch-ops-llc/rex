@@ -6,6 +6,8 @@ export type {
   Implementation,
   QAItem,
   EnablementSession,
+  Walkthrough,
+  WalkthroughStep,
   ClientSlackMapping,
   ClientEmailMapping,
   ClientConversation,
@@ -15,6 +17,7 @@ export type {
   SOW,
   SOWLineItem,
   ScopeAlert,
+  ScopeDocument,
   ChatSession,
   ChatMessage,
   ProjectPhase,
@@ -24,6 +27,7 @@ export type {
   DeliveryLogEntry,
   TranscriptSegment,
   CallInsight,
+  CustomProject,
 } from "@prisma/client";
 
 export {
@@ -37,6 +41,7 @@ export {
   ScopeAlertType,
   AlertSeverity,
   AlertStatus,
+  ScopeDocumentStatus,
   PhaseType,
   PhaseStatus,
   TaskStatus,
@@ -44,6 +49,8 @@ export {
   RequirementStatus,
   UATStatus,
   InsightType,
+  ProjectDeployStatus,
+  WalkthroughStatus,
 } from "@prisma/client";
 
 // ============================================================
@@ -77,6 +84,19 @@ export enum EventType {
   CALL_INSIGHT_EXTRACTED = "call_insight_extracted",
   CALL_COMPLETED = "call_completed",
   CALL_PROCESSING_COMPLETE = "call_processing_complete",
+  SCOPE_DOCUMENT_UPLOADED = "scope_document_uploaded",
+  SCOPE_DOCUMENT_PARSED = "scope_document_parsed",
+  SCOPE_DOCUMENT_PROCESSED = "scope_document_processed",
+  SCOPE_DOCUMENT_FAILED = "scope_document_failed",
+  PROJECT_CREATED = "project_created",
+  PROJECT_REPO_CREATED = "project_repo_created",
+  PROJECT_RAILWAY_LINKED = "project_railway_linked",
+  PROJECT_DEPLOY_STARTED = "project_deploy_started",
+  PROJECT_DEPLOYED = "project_deployed",
+  PROJECT_DEPLOY_FAILED = "project_deploy_failed",
+  WALKTHROUGH_REQUESTED = "walkthrough_requested",
+  WALKTHROUGH_COMPLETE = "walkthrough_complete",
+  WALKTHROUGH_FAILED = "walkthrough_failed",
 }
 
 export interface BaseEvent {
@@ -522,3 +542,66 @@ export interface CallProcessingResult {
   insights: ExtractedInsight[];
   summary?: string;
 }
+
+// ============================================================
+// CUSTOM PROJECT SCAFFOLD TYPES
+// ============================================================
+
+export interface ScaffoldConfig {
+  port?: number;
+  usePostgres?: boolean;
+  useRedis?: boolean;
+  useBullMQ?: boolean;
+  useWebhooks?: boolean;
+  hubspotIntegration?: boolean;
+  serviceTitanIntegration?: boolean;
+  description?: string;
+}
+
+export type ProjectTemplateType =
+  | "express-integration"
+  | "webhook-processor"
+  | "bidirectional-sync";
+
+export interface ScaffoldFile {
+  path: string;
+  content: string;
+}
+
+// ============================================================
+// SCOPE DOCUMENT INGESTION TYPES
+// ============================================================
+
+export interface ParsedScopeData {
+  title?: string;
+  clientName?: string;
+  workstreams: ParsedWorkstream[];
+  totalHours?: number;
+  totalBudget?: number;
+  startDate?: string;
+  endDate?: string;
+  paymentTerms?: string;
+  outOfScope?: string[];
+  assumptions?: string[];
+  rawSections: Record<string, string>;
+}
+
+export interface ParsedWorkstream {
+  name: string;
+  description?: string;
+  allocatedHours?: number;
+  rateTier?: string;
+  hourlyRate?: number;
+  deliverables?: string[];
+}
+
+export const SUPPORTED_SCOPE_FILE_TYPES = [
+  "application/pdf",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "text/plain",
+  "text/markdown",
+  "text/csv",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+] as const;
+
+export type SupportedScopeFileType = (typeof SUPPORTED_SCOPE_FILE_TYPES)[number];

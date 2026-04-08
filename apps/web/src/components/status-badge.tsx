@@ -17,6 +17,12 @@ const statusConfig: Record<
   ENABLEMENT: { label: "Enablement", variant: "info" },
   ACTIVE_SUPPORT: { label: "Active Support", variant: "success" },
   COMPLETE: { label: "Complete", variant: "success" },
+  // Walkthrough statuses
+  GENERATING: { label: "Generating", variant: "warning" },
+  CAPTURING: { label: "Capturing", variant: "info" },
+  NARRATING: { label: "Narrating", variant: "info" },
+  READY: { label: "Ready", variant: "success" },
+  FAILED: { label: "Failed", variant: "destructive" },
 };
 
 export function StatusBadge({ status }: { status: string }) {
