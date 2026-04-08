@@ -41,7 +41,7 @@ export default async function EngagementDetailPage({
         implementations: { orderBy: { stepOrder: "asc" } },
         qaItems: { orderBy: { createdAt: "asc" } },
         enablementSessions: true,
-        hubspotPortal: {
+        hubspotPortals: {
           select: {
             id: true,
             name: true,
@@ -165,7 +165,7 @@ export default async function EngagementDetailPage({
 
       <HubSpotConnectionCard
         engagementId={engagement.id}
-        linkedPortal={engagement.hubspotPortal ?? null}
+        linkedPortals={engagement.hubspotPortals ?? []}
       />
 
       <Tabs defaultValue="pipeline">
@@ -225,7 +225,7 @@ export default async function EngagementDetailPage({
             }
             activePhase={pipelineData?.activePhase || null}
             hasSow={!!engagement.sow}
-            hasPortal={!!engagement.hubspotPortal?.isActive}
+            hasPortal={engagement.hubspotPortals?.some((p: any) => p.isActive) ?? false}
           />
         </TabsContent>
 

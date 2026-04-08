@@ -16,7 +16,7 @@ export async function GET(
         enablementSessions: true,
         slackMapping: true,
         emailMapping: true,
-        hubspotPortal: {
+        hubspotPortals: {
           select: {
             id: true,
             name: true,
@@ -77,11 +77,11 @@ export async function PATCH(
 ) {
   try {
     const body = await request.json();
-    const { name, clientName, industry, hubspotTier, status, hubspotPortalId } = body;
+    const { name, clientName, industry, hubspotTier, status, addPortalId, removePortalId } = body;
 
-    if (hubspotPortalId) {
+    if (addPortalId) {
       const portal = await prisma.hubSpotPortal.findUnique({
-        where: { id: hubspotPortalId },
+        where: { id: addPortalId },
       });
       if (!portal) {
         return NextResponse.json(
@@ -97,18 +97,24 @@ export async function PATCH(
       }
     }
 
+    const data: any = {};
+    if (name !== undefined) data.name = name;
+    if (clientName !== undefined) data.clientName = clientName;
+    if (industry !== undefined) data.industry = industry;
+    if (hubspotTier !== undefined) data.hubspotTier = hubspotTier;
+    if (status !== undefined) data.status = status;
+
+    if (addPortalId) {
+      data.hubspotPortals = { connect: { id: addPortalId } };
+    } else if (removePortalId) {
+      data.hubspotPortals = { disconnect: { id: removePortalId } };
+    }
+
     const engagement = await prisma.engagement.update({
       where: { id: params.id },
-      data: {
-        ...(name !== undefined && { name }),
-        ...(clientName !== undefined && { clientName }),
-        ...(industry !== undefined && { industry }),
-        ...(hubspotTier !== undefined && { hubspotTier }),
-        ...(status !== undefined && { status }),
-        ...(hubspotPortalId !== undefined && { hubspotPortalId: hubspotPortalId || null }),
-      },
+      data,
       include: {
-        hubspotPortal: {
+        hubspotPortals: {
           select: {
             id: true,
             name: true,

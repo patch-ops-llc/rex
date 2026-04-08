@@ -29,7 +29,7 @@ export async function captureWalkthroughScreenshots(
       steps: { orderBy: { stepOrder: "asc" } },
       engagement: {
         include: {
-          hubspotPortal: true,
+          hubspotPortals: true,
           implementations: { orderBy: { stepOrder: "asc" } },
         },
       },
@@ -40,8 +40,8 @@ export async function captureWalkthroughScreenshots(
     throw new Error(`Walkthrough ${walkthroughId} not found`);
   }
 
-  const portal = walkthrough.engagement.hubspotPortal;
-  if (!portal || !portal.isActive) {
+  const portal = walkthrough.engagement.hubspotPortals?.find((p) => p.isActive) ?? null;
+  if (!portal) {
     log({
       level: "warn",
       message: "No active HubSpot portal linked — skipping screenshot capture",

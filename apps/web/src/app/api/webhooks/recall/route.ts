@@ -159,11 +159,13 @@ async function handleTranscription(data: any) {
       data: { lastProcessedAt: now },
     });
 
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
-    fetch(
-      `${appUrl}/api/engagements/${call.engagementId}/discovery/${call.id}/process`,
-      { method: "POST" }
-    ).catch((err) => console.error("Failed to trigger processing:", err));
+    const appUrl = (process.env.WEB_URL || "").replace(/\/+$/, "");
+    if (appUrl) {
+      fetch(
+        `${appUrl}/api/engagements/${call.engagementId}/discovery/${call.id}/process`,
+        { method: "POST" }
+      ).catch((err) => console.error("Failed to trigger processing:", err));
+    }
   }
 }
 
@@ -207,12 +209,13 @@ async function handleCallDone(data: any) {
     data: { rawTranscript },
   });
 
-  // Trigger final processing
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
-  fetch(
-    `${appUrl}/api/engagements/${call.engagementId}/discovery/${call.id}/process`,
-    { method: "POST", headers: { "x-final": "true" } }
-  ).catch((err) => console.error("Failed to trigger final processing:", err));
+  const appUrl = (process.env.WEB_URL || "").replace(/\/+$/, "");
+  if (appUrl) {
+    fetch(
+      `${appUrl}/api/engagements/${call.engagementId}/discovery/${call.id}/process`,
+      { method: "POST", headers: { "x-final": "true" } }
+    ).catch((err) => console.error("Failed to trigger final processing:", err));
+  }
 
   try {
     const redis = getRedis();

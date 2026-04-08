@@ -37,10 +37,16 @@ export async function POST(
       );
     }
 
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+    const appUrl = (process.env.WEB_URL || process.env.NEXT_PUBLIC_APP_URL || "").replace(/\/+$/, "");
     const displayUrl = process.env.DISPLAY_URL;
 
-    // Create the DB record first so we have a callId for the Display URL
+    if (!appUrl || !appUrl.startsWith("https://")) {
+      return NextResponse.json(
+        { error: "Server misconfiguration: WEB_URL must be set to a valid HTTPS URL" },
+        { status: 500 }
+      );
+    }
+
     const discoveryCall = await prisma.discoveryCall.create({
       data: {
         engagementId: params.id,

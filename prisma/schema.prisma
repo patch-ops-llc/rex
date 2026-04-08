@@ -19,13 +19,12 @@ model Engagement {
   clientName      String
   industry        String?
   hubspotTier     String?
-  hubspotPortalId String?
-  hubspotPortal   HubSpotPortal?   @relation(fields: [hubspotPortalId], references: [id], onDelete: SetNull)
   status          EngagementStatus @default(CREATED)
   embedding       Unsupported("vector(1536)")?
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
 
+  hubspotPortals     HubSpotPortal[]
   discoveryCalls     DiscoveryCall[]
   buildPlan          BuildPlan?
   implementations    Implementation[]

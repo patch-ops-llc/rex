@@ -58,11 +58,39 @@ export async function POST(
   { params }: { params: { id: string } }
 ) {
   try {
-    const formData = await request.formData();
+    const engagement = await prisma.engagement.findUnique({
+      where: { id: params.id },
+      select: { id: true },
+    });
+
+    if (!engagement) {
+      return NextResponse.json(
+        { error: "Engagement not found" },
+        { status: 404 }
+      );
+    }
+
+    let formData: FormData;
+    try {
+      formData = await request.formData();
+    } catch (formErr) {
+      const detail =
+        formErr instanceof Error ? formErr.message : "Could not read form data";
+      console.error("FormData parse error:", detail);
+      return NextResponse.json(
+        { error: `Upload failed: ${detail}` },
+        { status: 400 }
+      );
+    }
+
     const file = formData.get("file") as File | null;
 
     if (!file) {
       return NextResponse.json({ error: "No file provided" }, { status: 400 });
+    }
+
+    if (!file.size) {
+      return NextResponse.json({ error: "File is empty" }, { status: 400 });
     }
 
     const mimeType = file.type;
@@ -71,6 +99,13 @@ export async function POST(
         {
           error: `Unsupported file type: ${mimeType}. Supported: PDF, DOCX, TXT, MD, CSV`,
         },
+        { status: 400 }
+      );
+    }
+
+    if (!MIME_TO_EXT[mimeType]) {
+      return NextResponse.json(
+        { error: `File type ${mimeType} is recognized but cannot be parsed yet` },
         { status: 400 }
       );
     }
@@ -109,9 +144,11 @@ export async function POST(
       );
     }
   } catch (error) {
-    console.error("Failed to upload scope document:", error);
+    const detail =
+      error instanceof Error ? error.message : "Unknown error";
+    console.error("Failed to upload scope document:", detail, error);
     return NextResponse.json(
-      { error: "Failed to upload scope document" },
+      { error: `Failed to upload scope document: ${detail}` },
       { status: 500 }
     );
   }

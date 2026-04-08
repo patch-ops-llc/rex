@@ -38,6 +38,26 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const trimmedPortalId = String(portalId).trim();
+    if (!/^\d+$/.test(trimmedPortalId)) {
+      return NextResponse.json(
+        { error: "Portal ID must be a numeric Hub ID (e.g. 12345678)" },
+        { status: 400 }
+      );
+    }
+
+    let encryptedToken: string;
+    try {
+      encryptedToken = encrypt(accessToken);
+    } catch (encErr) {
+      const detail = encErr instanceof Error ? encErr.message : "Encryption failed";
+      console.error("Token encryption failed:", detail);
+      return NextResponse.json(
+        { error: `Server configuration error: ${detail}` },
+        { status: 500 }
+      );
+    }
+
     let verified = false;
     let verifiedAt: Date | null = null;
     try {
@@ -55,12 +75,10 @@ export async function POST(request: NextRequest) {
       // verification failed but we still store — user can retry
     }
 
-    const encryptedToken = encrypt(accessToken);
-
     const portal = await prisma.hubSpotPortal.create({
       data: {
         name,
-        portalId,
+        portalId: trimmedPortalId,
         accessToken: encryptedToken,
         isActive: verified,
         lastVerifiedAt: verifiedAt,
@@ -86,9 +104,10 @@ export async function POST(request: NextRequest) {
         { status: 409 }
       );
     }
-    console.error("Failed to create HubSpot portal:", error);
+    const detail = error instanceof Error ? error.message : "Unknown error";
+    console.error("Failed to create HubSpot portal:", detail, error);
     return NextResponse.json(
-      { error: "Failed to create portal" },
+      { error: `Failed to create portal: ${detail}` },
       { status: 500 }
     );
   }
