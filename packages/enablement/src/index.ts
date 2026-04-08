@@ -7,8 +7,7 @@ export {
   type WalkthroughContext,
   type WalkthroughStepInput,
 } from "./narration/context-assembler";
-export {
-  captureWalkthroughScreenshots,
-  type CaptureWalkthroughOptions,
-  buildNavigationTargets,
-} from "./capture";
+
+// Capture module (Playwright) is NOT re-exported from the main entry
+// to avoid bundling Playwright into the Next.js webpack build.
+// Import directly: import { ... } from "@rex/enablement/capture"
