@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@rex/shared";
 import { createBot, getBot, detectPlatform } from "@/lib/recall";
 
+// Minimal valid MP3 frame (silence) — required by Recall to enable the output_audio endpoint
+const SILENT_MP3_B64 =
+  "//uQxAAAAAANIAAAAAExBTUUzLjEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV";
+
 export async function POST(
   request: NextRequest,
   { params }: { params: { id: string } }
@@ -89,6 +93,18 @@ export async function POST(
         },
       };
     }
+
+    // Enable audio output so Rex can speak into the call via the output_audio endpoint.
+    // Recall requires automatic_audio_output to be set at bot creation time.
+    // Using a minimal silent MP3 frame as the initial audio (plays nothing audible on join).
+    botConfig.automatic_audio_output = {
+      in_call_recording: {
+        data: {
+          kind: "mp3",
+          b64_data: SILENT_MP3_B64,
+        },
+      },
+    };
 
     let recallBot;
     try {

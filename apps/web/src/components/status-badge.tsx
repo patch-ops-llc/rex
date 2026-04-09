@@ -17,6 +17,15 @@ const statusConfig: Record<
   ENABLEMENT: { label: "Enablement", variant: "info" },
   ACTIVE_SUPPORT: { label: "Active Support", variant: "success" },
   COMPLETE: { label: "Complete", variant: "success" },
+  // Build plan statuses
+  DRAFT: { label: "Draft", variant: "secondary" },
+  PENDING_REVIEW: { label: "Pending Review", variant: "warning" },
+  APPROVED: { label: "Approved", variant: "success" },
+  REJECTED: { label: "Rejected", variant: "destructive" },
+  // Call statuses
+  WAITING: { label: "Waiting", variant: "info" },
+  IN_PROGRESS: { label: "In Progress", variant: "info" },
+  COMPLETED: { label: "Completed", variant: "success" },
   // Walkthrough statuses
   GENERATING: { label: "Generating", variant: "warning" },
   CAPTURING: { label: "Capturing", variant: "info" },

@@ -3,9 +3,11 @@ import { prisma } from "@rex/shared";
 import { StatusBadge } from "@/components/status-badge";
 import { DeleteEngagementButton } from "@/components/delete-engagement-button";
 import { DiscoveryTab } from "@/components/discovery-tab";
+import { BuildPlanTab } from "@/components/build-plan-tab";
 import { ScopeTab } from "@/components/scope-tab";
 import { PipelineView } from "@/components/pipeline-view";
 import { HubSpotConnectionCard } from "@/components/hubspot-connection-card";
+import { EngagementContacts } from "@/components/engagement-contacts";
 import { WalkthroughsTab } from "@/components/walkthroughs-tab";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -25,6 +27,7 @@ export default async function EngagementDetailPage({
   let pipelineData: any = null;
   let walkthroughs: any[] = [];
   let scopeDocuments: any[] = [];
+  let contacts: any[] = [];
 
   try {
     engagement = await prisma.engagement.findUnique({
@@ -86,6 +89,11 @@ export default async function EngagementDetailPage({
       });
 
       scopeDocuments = await prisma.scopeDocument.findMany({
+        where: { engagementId: params.id },
+        orderBy: { createdAt: "desc" },
+      });
+
+      contacts = await prisma.engagementContact.findMany({
         where: { engagementId: params.id },
         orderBy: { createdAt: "desc" },
       });
@@ -171,6 +179,11 @@ export default async function EngagementDetailPage({
       <HubSpotConnectionCard
         engagementId={engagement.id}
         linkedPortals={engagement.hubspotPortals ?? []}
+      />
+
+      <EngagementContacts
+        engagementId={engagement.id}
+        initialContacts={contacts}
       />
 
       <Tabs defaultValue="pipeline">
@@ -275,6 +288,7 @@ export default async function EngagementDetailPage({
           <DiscoveryTab
             engagementId={engagement.id}
             clientName={engagement.clientName}
+            hasBuildPlan={!!engagement.buildPlan}
             initialCalls={engagement.discoveryCalls.map((call: any) => ({
               ...call,
               createdAt: call.createdAt.toISOString(),
@@ -284,33 +298,31 @@ export default async function EngagementDetailPage({
 
         {/* ── Build Plan Tab ───────────────────────────────────────── */}
         <TabsContent value="build-plan">
-          <Card>
-            <CardHeader>
-              <CardTitle>Build Plan</CardTitle>
-              <CardDescription>
-                AI-generated implementation plan from discovery output.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {engagement.buildPlan ? (
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium">
-                      Version {engagement.buildPlan.version}
-                    </span>
-                    <StatusBadge status={engagement.buildPlan.status} />
-                  </div>
-                  <pre className="rounded-lg bg-muted p-4 text-xs overflow-auto max-h-96">
-                    {JSON.stringify(engagement.buildPlan.planData, null, 2)}
-                  </pre>
-                </div>
-              ) : (
-                <p className="text-sm text-muted-foreground py-8 text-center">
-                  No build plan generated yet. Complete discovery first.
-                </p>
-              )}
-            </CardContent>
-          </Card>
+          <BuildPlanTab
+            engagementId={engagement.id}
+            buildPlan={
+              engagement.buildPlan
+                ? {
+                    id: engagement.buildPlan.id,
+                    version: engagement.buildPlan.version,
+                    status: engagement.buildPlan.status,
+                    planData: engagement.buildPlan.planData,
+                    createdAt: engagement.buildPlan.createdAt.toISOString(),
+                    updatedAt: engagement.buildPlan.updatedAt.toISOString(),
+                  }
+                : null
+            }
+            completedCallCount={
+              engagement.discoveryCalls.filter(
+                (c: any) => c.status === "COMPLETED"
+              ).length
+            }
+            totalInsightCount={engagement.discoveryCalls.reduce(
+              (sum: number, c: any) => sum + (c._count?.insights || 0),
+              0
+            )}
+            requirementCount={engagement._count?.requirementItems || 0}
+          />
         </TabsContent>
 
         {/* ── Implementation Tab ───────────────────────────────────── */}

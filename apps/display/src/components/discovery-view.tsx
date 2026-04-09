@@ -10,6 +10,15 @@ import {
   CalendarClock,
   HelpCircle,
   UserCircle,
+  Circle,
+  CircleDot,
+  CircleCheckBig,
+  CircleDashed,
+  SkipForward,
+  MessageCircleQuestion,
+  Sparkles,
+  ArrowRight,
+  Volume2,
 } from "lucide-react";
 import { cn, formatTime } from "@/lib/utils";
 
@@ -36,9 +45,39 @@ interface Insight {
   metadata: Record<string, unknown> | null;
 }
 
+interface AgendaItem {
+  id: string;
+  title: string;
+  description: string | null;
+  status: string;
+  displayOrder: number;
+  notes: string | null;
+  resolvedAt: string | null;
+  relatedInsights: string[] | null;
+}
+
+interface Suggestion {
+  id: string;
+  suggestionType: "question" | "coaching_tip" | "topic_prompt";
+  content: string;
+  reasoning: string;
+  priority: "high" | "medium" | "low";
+  relatedAgendaItemId?: string;
+  receivedAt: number;
+}
+
+interface RexSpeakingState {
+  text: string;
+  triggeredBy: string;
+  timestamp: number;
+}
+
 interface DiscoveryViewProps {
   segments: Segment[];
   insights: Insight[];
+  agendaItems: AgendaItem[];
+  suggestions: Suggestion[];
+  rexSpeaking: RexSpeakingState | null;
   elapsed: string;
   clientName: string;
 }
@@ -95,9 +134,23 @@ function getSpeakerColor(speaker: string): string {
 // Component
 // ---------------------------------------------------------------------------
 
+const AGENDA_STATUS_CONFIG: Record<
+  string,
+  { icon: typeof Circle; color: string; bgColor: string; label: string }
+> = {
+  PENDING: { icon: Circle, color: "text-zinc-500", bgColor: "bg-zinc-800/50", label: "Pending" },
+  ACTIVE: { icon: CircleDot, color: "text-blue-400", bgColor: "bg-blue-500/10", label: "Discussing" },
+  RESOLVED: { icon: CircleCheckBig, color: "text-emerald-400", bgColor: "bg-emerald-500/10", label: "Resolved" },
+  PARTIALLY_RESOLVED: { icon: CircleDashed, color: "text-amber-400", bgColor: "bg-amber-500/10", label: "Partial" },
+  SKIPPED: { icon: SkipForward, color: "text-zinc-600", bgColor: "bg-zinc-800/30", label: "Skipped" },
+};
+
 export function DiscoveryView({
   segments,
   insights,
+  agendaItems,
+  suggestions,
+  rexSpeaking,
   elapsed,
   clientName,
 }: DiscoveryViewProps) {
@@ -203,6 +256,21 @@ export function DiscoveryView({
           </div>
         </div>
       </div>
+
+      {/* Agenda progress bar */}
+      {agendaItems.length > 0 && (
+        <AgendaTracker items={agendaItems} />
+      )}
+
+      {/* Rex speaking indicator */}
+      {rexSpeaking && (
+        <RexSpeakingBanner text={rexSpeaking.text} triggeredBy={rexSpeaking.triggeredBy} />
+      )}
+
+      {/* Live suggestions bar */}
+      {suggestions.length > 0 && !rexSpeaking && (
+        <SuggestionsBar suggestions={suggestions} />
+      )}
 
       {/* Main content: two columns */}
       <div className="flex flex-1 overflow-hidden">
@@ -388,8 +456,217 @@ export function DiscoveryView({
         <div className="flex items-center gap-4 text-xs text-zinc-700">
           <span>{segments.length} segments</span>
           <span>{insights.length} insights</span>
+          {agendaItems.length > 0 && (
+            <span>
+              {agendaItems.filter((a) => a.status === "RESOLVED").length}/{agendaItems.length} agenda
+            </span>
+          )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Rex Speaking Banner
+// ---------------------------------------------------------------------------
+
+function RexSpeakingBanner({ text, triggeredBy }: { text: string; triggeredBy: string }) {
+  return (
+    <div className="border-b border-emerald-500/30 bg-gradient-to-r from-emerald-950/50 via-zinc-950/60 to-emerald-950/50">
+      <div className="flex items-start gap-3 px-5 py-3">
+        <div className="flex shrink-0 items-center gap-2 pt-0.5">
+          <div className="relative flex h-6 w-6 items-center justify-center rounded-full bg-emerald-500/20">
+            <Volume2 className="h-3.5 w-3.5 text-emerald-400 animate-pulse" />
+          </div>
+          <div>
+            <span className="text-[10px] font-semibold uppercase tracking-widest text-emerald-400">
+              Rex speaking
+            </span>
+            <span className="ml-2 text-[10px] text-zinc-600">
+              responding to {triggeredBy}
+            </span>
+          </div>
+        </div>
+        <p className="flex-1 text-[14px] leading-relaxed text-zinc-200 italic">
+          &ldquo;{text}&rdquo;
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Suggestions Bar
+// ---------------------------------------------------------------------------
+
+const SUGGESTION_TYPE_CONFIG: Record<
+  string,
+  { icon: typeof MessageCircleQuestion; color: string; bgColor: string; borderColor: string; label: string }
+> = {
+  question: {
+    icon: MessageCircleQuestion,
+    color: "text-sky-300",
+    bgColor: "bg-sky-500/10",
+    borderColor: "border-sky-500/30",
+    label: "Ask",
+  },
+  coaching_tip: {
+    icon: Sparkles,
+    color: "text-amber-300",
+    bgColor: "bg-amber-500/10",
+    borderColor: "border-amber-500/30",
+    label: "Tip",
+  },
+  topic_prompt: {
+    icon: ArrowRight,
+    color: "text-violet-300",
+    bgColor: "bg-violet-500/10",
+    borderColor: "border-violet-500/30",
+    label: "Next",
+  },
+};
+
+function SuggestionsBar({ suggestions }: { suggestions: Suggestion[] }) {
+  const sorted = [...suggestions].sort((a, b) => {
+    const priorityOrder = { high: 0, medium: 1, low: 2 };
+    return priorityOrder[a.priority] - priorityOrder[b.priority];
+  });
+
+  const topSuggestions = sorted.slice(0, 3);
+
+  return (
+    <div className="border-b border-sky-500/20 bg-gradient-to-r from-sky-950/40 via-zinc-950/60 to-sky-950/40">
+      <div className="flex items-start gap-3 px-5 py-2.5">
+        <div className="flex shrink-0 items-center gap-1.5 pt-0.5">
+          <Sparkles className="h-3.5 w-3.5 text-sky-400" />
+          <span className="text-[10px] font-semibold uppercase tracking-widest text-sky-400">
+            Rex suggests
+          </span>
+        </div>
+
+        <div className="flex flex-1 flex-wrap gap-2">
+          {topSuggestions.map((suggestion) => {
+            const config =
+              SUGGESTION_TYPE_CONFIG[suggestion.suggestionType] ||
+              SUGGESTION_TYPE_CONFIG.coaching_tip;
+            const Icon = config.icon;
+
+            return (
+              <div
+                key={suggestion.id}
+                className={cn(
+                  "flex max-w-[400px] items-start gap-2 rounded-lg border px-3 py-1.5 animate-slide-in",
+                  config.borderColor,
+                  config.bgColor,
+                  suggestion.priority === "high" && "ring-1 ring-sky-500/20"
+                )}
+              >
+                <Icon
+                  className={cn("mt-0.5 h-3.5 w-3.5 shrink-0", config.color)}
+                />
+                <div className="min-w-0">
+                  <p className="text-[13px] leading-snug text-zinc-200">
+                    {suggestion.content}
+                  </p>
+                  {suggestion.reasoning && (
+                    <p className="mt-0.5 text-[10px] leading-tight text-zinc-500">
+                      {suggestion.reasoning}
+                    </p>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Agenda Tracker
+// ---------------------------------------------------------------------------
+
+function AgendaTracker({ items }: { items: AgendaItem[] }) {
+  const resolved = items.filter(
+    (i) => i.status === "RESOLVED" || i.status === "SKIPPED"
+  ).length;
+  const active = items.find((i) => i.status === "ACTIVE");
+  const progress = items.length > 0 ? (resolved / items.length) * 100 : 0;
+
+  return (
+    <div className="border-b border-zinc-800/40 bg-zinc-950/60">
+      {/* Progress bar */}
+      <div className="h-0.5 bg-zinc-800/40">
+        <div
+          className="h-full bg-emerald-500 transition-all duration-700 ease-out"
+          style={{ width: `${progress}%` }}
+        />
+      </div>
+
+      <div className="flex items-center gap-4 px-5 py-2">
+        <div className="flex items-center gap-1.5">
+          <ListTodo className="h-3.5 w-3.5 text-zinc-500" />
+          <span className="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">
+            Agenda
+          </span>
+          <span className="text-[10px] text-zinc-600">
+            {resolved}/{items.length}
+          </span>
+        </div>
+
+        <div className="flex flex-1 items-center gap-1 overflow-x-auto">
+          {items.map((item) => {
+            const config = AGENDA_STATUS_CONFIG[item.status] || AGENDA_STATUS_CONFIG.PENDING;
+            const Icon = config.icon;
+            const isActive = item.status === "ACTIVE";
+
+            return (
+              <div
+                key={item.id}
+                className={cn(
+                  "flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] transition-all",
+                  isActive
+                    ? "border border-blue-500/40 bg-blue-500/10 text-blue-300"
+                    : item.status === "RESOLVED"
+                      ? "text-emerald-400/70"
+                      : item.status === "PARTIALLY_RESOLVED"
+                        ? "text-amber-400/70"
+                        : item.status === "SKIPPED"
+                          ? "text-zinc-600 line-through"
+                          : "text-zinc-500"
+                )}
+              >
+                <Icon className="h-3 w-3 shrink-0" />
+                <span className="max-w-[120px] truncate">
+                  {item.title}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+
+        {active && (
+          <div className="flex shrink-0 items-center gap-1.5 text-[11px] text-blue-400">
+            <span className="relative flex h-1.5 w-1.5">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400 opacity-75" />
+              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-blue-500" />
+            </span>
+            <span className="font-medium">Discussing</span>
+          </div>
+        )}
+      </div>
+
+      {/* Active item detail */}
+      {active && active.notes && (
+        <div className="border-t border-zinc-800/30 px-5 py-1.5">
+          <p className="text-[11px] leading-relaxed text-zinc-400">
+            <span className="font-semibold text-blue-400">{active.title}:</span>{" "}
+            {active.notes.split("\n").pop()}
+          </p>
+        </div>
+      )}
     </div>
   );
 }

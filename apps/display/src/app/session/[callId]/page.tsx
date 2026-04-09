@@ -29,10 +29,35 @@ interface Insight {
   metadata: Record<string, unknown> | null;
 }
 
+interface AgendaItem {
+  id: string;
+  title: string;
+  description: string | null;
+  status: string;
+  displayOrder: number;
+  notes: string | null;
+  resolvedAt: string | null;
+  relatedInsights: string[] | null;
+}
+
+interface Suggestion {
+  id: string;
+  suggestionType: "question" | "coaching_tip" | "topic_prompt";
+  content: string;
+  reasoning: string;
+  priority: "high" | "medium" | "low";
+  relatedAgendaItemId?: string;
+  expiresAfterSeconds?: number;
+  receivedAt: number;
+}
+
 interface State {
   status: string;
   segments: Segment[];
   insights: Insight[];
+  agendaItems: AgendaItem[];
+  suggestions: Suggestion[];
+  rexSpeaking: { text: string; triggeredBy: string; timestamp: number } | null;
   callTitle: string;
   clientName: string;
   engagementName: string;
@@ -47,6 +72,7 @@ type Action =
         status: string;
         segments: Segment[];
         insights: Insight[];
+        agendaItems: AgendaItem[];
         callTitle: string;
         clientName: string;
         engagementName: string;
@@ -55,6 +81,11 @@ type Action =
     }
   | { type: "ADD_SEGMENT"; payload: Segment }
   | { type: "ADD_INSIGHT"; payload: Insight }
+  | { type: "UPSERT_AGENDA_ITEM"; payload: AgendaItem }
+  | { type: "ADD_SUGGESTION"; payload: Suggestion }
+  | { type: "EXPIRE_SUGGESTIONS" }
+  | { type: "REX_SPEAKING"; payload: { text: string; triggeredBy: string; timestamp: number } }
+  | { type: "REX_DONE_SPEAKING" }
   | { type: "SET_STATUS"; payload: string }
   | { type: "SET_CONNECTED"; payload: boolean }
   | { type: "SET_STARTED_AT"; payload: string };
@@ -67,6 +98,8 @@ function reducer(state: State, action: Action): State {
         status: action.payload.status,
         segments: action.payload.segments,
         insights: action.payload.insights,
+        agendaItems: action.payload.agendaItems || [],
+        suggestions: [],
         callTitle: action.payload.callTitle,
         clientName: action.payload.clientName,
         engagementName: action.payload.engagementName,
@@ -74,13 +107,49 @@ function reducer(state: State, action: Action): State {
         connected: true,
       };
     case "ADD_SEGMENT": {
-      if (state.segments.some((s) => s.id === action.payload.id)) return state;
+      const idx = state.segments.findIndex((s) => s.id === action.payload.id);
+      if (idx >= 0) {
+        const updated = [...state.segments];
+        updated[idx] = action.payload;
+        return { ...state, segments: updated };
+      }
       return { ...state, segments: [...state.segments, action.payload] };
     }
     case "ADD_INSIGHT": {
       if (state.insights.some((i) => i.id === action.payload.id)) return state;
       return { ...state, insights: [...state.insights, action.payload] };
     }
+    case "UPSERT_AGENDA_ITEM": {
+      const aidx = state.agendaItems.findIndex((a) => a.id === action.payload.id);
+      if (aidx >= 0) {
+        const updated = [...state.agendaItems];
+        updated[aidx] = action.payload;
+        return { ...state, agendaItems: updated };
+      }
+      return {
+        ...state,
+        agendaItems: [...state.agendaItems, action.payload].sort(
+          (a, b) => a.displayOrder - b.displayOrder
+        ),
+      };
+    }
+    case "ADD_SUGGESTION": {
+      if (state.suggestions.some((s) => s.id === action.payload.id)) return state;
+      const updated = [...state.suggestions, action.payload].slice(-5);
+      return { ...state, suggestions: updated };
+    }
+    case "EXPIRE_SUGGESTIONS": {
+      const now = Date.now();
+      const active = state.suggestions.filter(
+        (s) => now - s.receivedAt < (s.expiresAfterSeconds ?? 90) * 1000
+      );
+      if (active.length === state.suggestions.length) return state;
+      return { ...state, suggestions: active };
+    }
+    case "REX_SPEAKING":
+      return { ...state, rexSpeaking: action.payload };
+    case "REX_DONE_SPEAKING":
+      return { ...state, rexSpeaking: null };
     case "SET_STATUS":
       return { ...state, status: action.payload };
     case "SET_CONNECTED":
@@ -105,6 +174,9 @@ export default function SessionPage({
     status: "WAITING",
     segments: [],
     insights: [],
+    agendaItems: [],
+    suggestions: [],
+    rexSpeaking: null,
     callTitle: "",
     clientName: "",
     engagementName: "",
@@ -154,6 +226,40 @@ export default function SessionPage({
       }
     });
 
+    es.addEventListener("agenda", (e) => {
+      const data = JSON.parse(e.data);
+      if (data.item) {
+        dispatch({ type: "UPSERT_AGENDA_ITEM", payload: data.item });
+      }
+    });
+
+    es.addEventListener("suggestion", (e) => {
+      const data = JSON.parse(e.data);
+      if (data.suggestion) {
+        dispatch({
+          type: "ADD_SUGGESTION",
+          payload: { ...data.suggestion, receivedAt: Date.now() },
+        });
+      }
+    });
+
+    es.addEventListener("voice", (e) => {
+      const data = JSON.parse(e.data);
+      if (data.text) {
+        dispatch({
+          type: "REX_SPEAKING",
+          payload: {
+            text: data.text,
+            triggeredBy: data.triggeredBy,
+            timestamp: data.timestamp,
+          },
+        });
+        setTimeout(() => {
+          dispatch({ type: "REX_DONE_SPEAKING" });
+        }, Math.min(data.text.length * 80, 15000));
+      }
+    });
+
     es.addEventListener("status", (e) => {
       const data = JSON.parse(e.data);
       if (data.status) {
@@ -188,6 +294,14 @@ export default function SessionPage({
     };
   }, [connect]);
 
+  // Expire stale suggestions every 10s
+  useEffect(() => {
+    const interval = setInterval(() => {
+      dispatch({ type: "EXPIRE_SUGGESTIONS" });
+    }, 10_000);
+    return () => clearInterval(interval);
+  }, []);
+
   // Determine which view to show
   const hasContent = state.segments.length > 0 || state.insights.length > 0;
   const isCompleted = state.status === "COMPLETED";
@@ -215,6 +329,9 @@ export default function SessionPage({
         <DiscoveryView
           segments={state.segments}
           insights={state.insights}
+          agendaItems={state.agendaItems}
+          suggestions={state.suggestions}
+          rexSpeaking={state.rexSpeaking}
           elapsed={elapsed}
           clientName={state.clientName}
         />

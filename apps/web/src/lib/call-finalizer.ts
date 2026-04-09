@@ -5,7 +5,7 @@ export async function finalizeCall(callId: string): Promise<void> {
     where: { id: callId },
     include: {
       engagement: true,
-      segments: { orderBy: { startTime: "asc" } },
+      segments: { where: { isFinal: true }, orderBy: { startTime: "asc" } },
       insights: true,
     },
   });
@@ -35,6 +35,9 @@ export async function finalizeCall(callId: string): Promise<void> {
   });
 
   // 2. Create CorpusEntry from transcript
+  const requirements = call.insights.filter((i) => i.type === "REQUIREMENT");
+  const scopeConcerns = call.insights.filter((i) => i.type === "SCOPE_CONCERN");
+
   if (call.segments.length > 0) {
     const transcriptLines = call.segments.map((s) => ({
       speaker: s.speaker,
@@ -44,10 +47,10 @@ export async function finalizeCall(callId: string): Promise<void> {
 
     await prisma.corpusEntry.create({
       data: {
-        name: call.title || `Discovery Call - ${call.engagement.clientName}`,
+        name: call.title || `Discovery Call - ${call.engagement?.clientName || "Unknown"}`,
         transcript: transcriptLines,
         tags: ["discovery", "auto-captured", call.platform || "unknown"],
-        industry: call.engagement.industry || undefined,
+        industry: call.engagement?.industry || undefined,
         category: "discovery_call",
         source: `recall:${call.recallBotId}`,
         annotations: {
@@ -56,109 +59,108 @@ export async function finalizeCall(callId: string): Promise<void> {
           duration: call.duration,
           insightCounts: {
             total: call.insights.length,
-            requirements: call.insights.filter((i) => i.type === "REQUIREMENT").length,
+            requirements: requirements.length,
             actionItems: call.insights.filter((i) => i.type === "ACTION_ITEM").length,
             decisions: call.insights.filter((i) => i.type === "DECISION").length,
-            scopeConcerns: call.insights.filter((i) => i.type === "SCOPE_CONCERN").length,
-          },
-        },
-      },
-    });
-  }
-
-  // 3. Seed RequirementItems from REQUIREMENT insights
-  const requirements = call.insights.filter((i) => i.type === "REQUIREMENT");
-  if (requirements.length > 0) {
-    const existingReqs = await prisma.requirementItem.count({
-      where: { engagementId: call.engagementId },
-    });
-
-    for (let i = 0; i < requirements.length; i++) {
-      const req = requirements[i];
-      const meta = req.metadata as Record<string, any> | null;
-
-      await prisma.requirementItem.create({
-        data: {
-          engagementId: call.engagementId,
-          category: meta?.category || "discovery",
-          question: req.content,
-          context: req.speaker
-            ? `Mentioned by ${req.speaker} during discovery call`
-            : "Captured during discovery call",
-          status: "PENDING",
-          priority: meta?.priority?.toUpperCase() || "MEDIUM",
-          displayOrder: existingReqs + i,
-        },
-      });
-    }
-  }
-
-  // 4. Create ScopeAlerts from SCOPE_CONCERN insights
-  const scopeConcerns = call.insights.filter(
-    (i) => i.type === "SCOPE_CONCERN"
-  );
-  for (const concern of scopeConcerns) {
-    await prisma.scopeAlert.create({
-      data: {
-        engagementId: call.engagementId,
-        type: "SCOPE_CREEP",
-        severity: (concern.confidence || 0) >= 0.8 ? "WARNING" : "INFO",
-        title: concern.content.length > 80
-          ? concern.content.slice(0, 77) + "..."
-          : concern.content,
-        description: concern.content,
-        sourceId: call.id,
-        sourceType: "DiscoveryCall",
-      },
-    });
-  }
-
-  // 5. Update pipeline DISCOVERY phase tasks if they exist
-  const discoveryTasks = await prisma.projectTask.findMany({
-    where: {
-      engagementId: call.engagementId,
-      phaseType: "DISCOVERY",
-      status: { in: ["PENDING", "IN_PROGRESS"] },
-    },
-  });
-
-  for (const task of discoveryTasks) {
-    const titleLower = task.title.toLowerCase();
-    if (
-      titleLower.includes("conduct discovery") ||
-      titleLower.includes("process discovery") ||
-      titleLower.includes("identify requirement")
-    ) {
-      await prisma.projectTask.update({
-        where: { id: task.id },
-        data: {
-          status: "COMPLETED",
-          completedAt: new Date(),
-          outputData: {
-            callId,
-            insightsExtracted: call.insights.length,
-            requirementsFound: requirements.length,
             scopeConcerns: scopeConcerns.length,
           },
         },
-      });
-    }
+      },
+    });
   }
 
-  // 6. Log to delivery trail
-  await prisma.deliveryLogEntry.create({
-    data: {
-      engagementId: call.engagementId,
-      action: "CALL_PROCESSED",
-      phaseType: "DISCOVERY",
-      actor: "rex",
-      description: `Discovery call processed: ${call.insights.length} insights extracted (${requirements.length} requirements, ${scopeConcerns.length} scope concerns)`,
-      metadata: {
-        callId,
-        duration: call.duration,
-        segmentCount: call.segments.length,
-        insightsByType: structured,
+  // Engagement-specific operations only run when call is associated
+  if (call.engagementId) {
+    // 3. Seed RequirementItems from REQUIREMENT insights
+    if (requirements.length > 0) {
+      const existingReqs = await prisma.requirementItem.count({
+        where: { engagementId: call.engagementId },
+      });
+
+      for (let i = 0; i < requirements.length; i++) {
+        const req = requirements[i];
+        const meta = req.metadata as Record<string, any> | null;
+
+        await prisma.requirementItem.create({
+          data: {
+            engagementId: call.engagementId,
+            category: meta?.category || "discovery",
+            question: req.content,
+            context: req.speaker
+              ? `Mentioned by ${req.speaker} during discovery call`
+              : "Captured during discovery call",
+            status: "PENDING",
+            priority: meta?.priority?.toUpperCase() || "MEDIUM",
+            displayOrder: existingReqs + i,
+          },
+        });
+      }
+    }
+
+    // 4. Create ScopeAlerts from SCOPE_CONCERN insights
+    for (const concern of scopeConcerns) {
+      await prisma.scopeAlert.create({
+        data: {
+          engagementId: call.engagementId,
+          type: "SCOPE_CREEP",
+          severity: (concern.confidence || 0) >= 0.8 ? "WARNING" : "INFO",
+          title: concern.content.length > 80
+            ? concern.content.slice(0, 77) + "..."
+            : concern.content,
+          description: concern.content,
+          sourceId: call.id,
+          sourceType: "DiscoveryCall",
+        },
+      });
+    }
+
+    // 5. Update pipeline DISCOVERY phase tasks if they exist
+    const discoveryTasks = await prisma.projectTask.findMany({
+      where: {
+        engagementId: call.engagementId,
+        phaseType: "DISCOVERY",
+        status: { in: ["PENDING", "IN_PROGRESS"] },
       },
-    },
-  });
+    });
+
+    for (const task of discoveryTasks) {
+      const titleLower = task.title.toLowerCase();
+      if (
+        titleLower.includes("conduct discovery") ||
+        titleLower.includes("process discovery") ||
+        titleLower.includes("identify requirement")
+      ) {
+        await prisma.projectTask.update({
+          where: { id: task.id },
+          data: {
+            status: "COMPLETED",
+            completedAt: new Date(),
+            outputData: {
+              callId,
+              insightsExtracted: call.insights.length,
+              requirementsFound: requirements.length,
+              scopeConcerns: scopeConcerns.length,
+            },
+          },
+        });
+      }
+    }
+
+    // 6. Log to delivery trail
+    await prisma.deliveryLogEntry.create({
+      data: {
+        engagementId: call.engagementId,
+        action: "CALL_PROCESSED",
+        phaseType: "DISCOVERY",
+        actor: "rex",
+        description: `Discovery call processed: ${call.insights.length} insights extracted (${requirements.length} requirements, ${scopeConcerns.length} scope concerns)`,
+        metadata: {
+          callId,
+          duration: call.duration,
+          segmentCount: call.segments.length,
+          insightsByType: structured,
+        },
+      },
+    });
+  }
 }

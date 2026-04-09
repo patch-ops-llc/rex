@@ -39,6 +39,19 @@ export interface RecallBotConfig {
       config: { url: string };
     };
   };
+  automatic_audio_output?: {
+    in_call_recording?: {
+      data: {
+        kind: "mp3";
+        b64_data: string;
+      };
+      replay_on_participant_join?: {
+        debounce_mode: "trailing" | "leading";
+        debounce_interval: number;
+        disable_after: number;
+      };
+    };
+  };
 }
 
 export interface RecallBot {
@@ -110,6 +123,28 @@ export async function getBotTranscript(botId: string): Promise<RecallTranscriptE
   return res.json();
 }
 
+export async function startScreenShare(
+  botId: string,
+  url: string
+): Promise<void> {
+  const res = await fetch(
+    `${RECALL_API_BASE}/bot/${botId}/output_screenshare/`,
+    {
+      method: "POST",
+      headers: getHeaders(),
+      body: JSON.stringify({
+        kind: "webpage",
+        config: { url },
+      }),
+    }
+  );
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Recall output_screenshare error ${res.status}: ${body}`);
+  }
+}
+
 export async function removeBot(botId: string): Promise<void> {
   const res = await fetch(`${RECALL_API_BASE}/bot/${botId}/leave_call`, {
     method: "POST",
@@ -119,6 +154,22 @@ export async function removeBot(botId: string): Promise<void> {
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`Recall API error ${res.status}: ${body}`);
+  }
+}
+
+export async function outputAudio(botId: string, mp3Base64: string): Promise<void> {
+  const res = await fetch(`${RECALL_API_BASE}/bot/${botId}/output_audio/`, {
+    method: "POST",
+    headers: getHeaders(),
+    body: JSON.stringify({
+      kind: "mp3",
+      b64_data: mp3Base64,
+    }),
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Recall output_audio error ${res.status}: ${body}`);
   }
 }
 

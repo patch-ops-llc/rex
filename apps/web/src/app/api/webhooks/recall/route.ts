@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@rex/shared";
+import { prisma, publishCallEvent } from "@rex/shared";
+import { isRexDirectedQuestion, handleRexVoiceResponse } from "@/lib/rex-voice";
+import { startScreenShare } from "@/lib/recall";
 
-const PROCESS_INTERVAL_SECONDS = 30;
+const PROCESS_INTERVAL_SECONDS = 15;
 
 export async function POST(request: NextRequest) {
   try {
@@ -93,6 +95,53 @@ async function handleStatusChange(data: any) {
     where: { id: call.id },
     data: updateData,
   });
+
+  publishCallEvent(call.id, { type: "status", data: { status: newStatus } });
+
+  // Start screen share when bot enters the call so Rex's display is pinned as primary view
+  const statusCode = status?.code || status;
+  if (
+    (statusCode === "in_call_not_recording" || statusCode === "in_call_recording") &&
+    bot_id
+  ) {
+    const displayUrl = process.env.DISPLAY_URL;
+    if (displayUrl) {
+      startScreenShare(bot_id, `${displayUrl}/session/${call.id}`).catch(
+        (err) => console.error("Failed to start screen share:", err)
+      );
+    }
+  }
+
+  if (newStatus === "COMPLETED") {
+    const segments = await prisma.transcriptSegment.findMany({
+      where: { discoveryCallId: call.id, isFinal: true },
+      orderBy: { startTime: "asc" },
+    });
+
+    if (segments.length > 0) {
+      await prisma.discoveryCall.update({
+        where: { id: call.id },
+        data: {
+          rawTranscript: segments.map((s) => ({
+            speaker: s.speaker,
+            text: s.text,
+            startTime: s.startTime,
+            endTime: s.endTime,
+          })),
+        },
+      });
+    }
+
+    if (call.engagementId) {
+      const appUrl = (process.env.WEB_URL || "").replace(/\/+$/, "");
+      if (appUrl) {
+        fetch(
+          `${appUrl}/api/engagements/${call.engagementId}/discovery/${call.id}/process`,
+          { method: "POST", headers: { "x-final": "true" } }
+        ).catch((err) => console.error("Failed to trigger final processing from status change:", err));
+      }
+    }
+  }
 }
 
 async function handleRealtimeTranscript(data: any, isFinal: boolean) {
@@ -113,19 +162,87 @@ async function handleRealtimeTranscript(data: any, isFinal: boolean) {
     entry.words[entry.words.length - 1]?.end_timestamp?.relative ?? startTime;
   const speaker = entry.participant?.name || "Unknown";
 
-  await prisma.transcriptSegment.create({
-    data: {
-      discoveryCallId: call.id,
-      speaker,
-      text,
-      startTime,
-      endTime,
-      confidence: 1,
-      isFinal,
-    },
-  });
+  if (isFinal) {
+    const existingPartial = await prisma.transcriptSegment.findFirst({
+      where: { discoveryCallId: call.id, speaker, isFinal: false },
+      orderBy: { createdAt: "desc" },
+    });
 
-  if (!isFinal) return;
+    let segment;
+    if (existingPartial) {
+      segment = await prisma.transcriptSegment.update({
+        where: { id: existingPartial.id },
+        data: { text, startTime, endTime, confidence: 1, isFinal: true },
+      });
+    } else {
+      segment = await prisma.transcriptSegment.create({
+        data: {
+          discoveryCallId: call.id,
+          speaker,
+          text,
+          startTime,
+          endTime,
+          confidence: 1,
+          isFinal: true,
+        },
+      });
+    }
+
+    publishCallEvent(call.id, {
+      type: "transcript",
+      data: {
+        segment: {
+          id: segment.id, speaker: segment.speaker, text: segment.text,
+          startTime: segment.startTime, endTime: segment.endTime, isFinal: true,
+        },
+      },
+    });
+
+    // Check if someone is addressing Rex directly — fire voice response (non-blocking)
+    if (isRexDirectedQuestion(text)) {
+      handleRexVoiceResponse(call.id, text, speaker).catch((err) =>
+        console.error("Rex voice response error:", err)
+      );
+    }
+  } else {
+    const existingPartial = await prisma.transcriptSegment.findFirst({
+      where: { discoveryCallId: call.id, speaker, isFinal: false },
+      orderBy: { createdAt: "desc" },
+    });
+
+    let segment;
+    if (existingPartial) {
+      segment = await prisma.transcriptSegment.update({
+        where: { id: existingPartial.id },
+        data: { text, startTime, endTime },
+      });
+    } else {
+      segment = await prisma.transcriptSegment.create({
+        data: {
+          discoveryCallId: call.id,
+          speaker,
+          text,
+          startTime,
+          endTime,
+          confidence: 1,
+          isFinal: false,
+        },
+      });
+    }
+
+    publishCallEvent(call.id, {
+      type: "transcript",
+      data: {
+        segment: {
+          id: segment.id, speaker: segment.speaker, text: segment.text,
+          startTime: segment.startTime, endTime: segment.endTime, isFinal: false,
+        },
+      },
+    });
+    return;
+  }
+
+  // Only finals reach here — check if we should trigger periodic processing
 
   const now = new Date();
   const lastProcessed = call.lastProcessedAt;
@@ -139,12 +256,14 @@ async function handleRealtimeTranscript(data: any, isFinal: boolean) {
       data: { lastProcessedAt: now },
     });
 
-    const appUrl = (process.env.WEB_URL || "").replace(/\/+$/, "");
-    if (appUrl) {
-      fetch(
-        `${appUrl}/api/engagements/${call.engagementId}/discovery/${call.id}/process`,
-        { method: "POST" }
-      ).catch((err) => console.error("Failed to trigger processing:", err));
+    if (call.engagementId) {
+      const appUrl = (process.env.WEB_URL || "").replace(/\/+$/, "");
+      if (appUrl) {
+        fetch(
+          `${appUrl}/api/engagements/${call.engagementId}/discovery/${call.id}/process`,
+          { method: "POST" }
+        ).catch((err) => console.error("Failed to trigger processing:", err));
+      }
     }
   }
 }
@@ -171,7 +290,7 @@ async function handleTranscription(data: any) {
       entry.words.reduce((sum: number, w: any) => sum + (w.confidence || 1), 0) /
       entry.words.length;
 
-    await prisma.transcriptSegment.create({
+    const segment = await prisma.transcriptSegment.create({
       data: {
         discoveryCallId: call.id,
         speaker: entry.speaker || "Unknown",
@@ -180,6 +299,16 @@ async function handleTranscription(data: any) {
         endTime,
         confidence: avgConfidence,
         isFinal: entry.is_final ?? true,
+      },
+    });
+
+    publishCallEvent(call.id, {
+      type: "transcript",
+      data: {
+        segment: {
+          id: segment.id, speaker: segment.speaker, text: segment.text,
+          startTime: segment.startTime, endTime: segment.endTime, isFinal: segment.isFinal,
+        },
       },
     });
   }
@@ -196,12 +325,14 @@ async function handleTranscription(data: any) {
       data: { lastProcessedAt: now },
     });
 
-    const appUrl = (process.env.WEB_URL || "").replace(/\/+$/, "");
-    if (appUrl) {
-      fetch(
-        `${appUrl}/api/engagements/${call.engagementId}/discovery/${call.id}/process`,
-        { method: "POST" }
-      ).catch((err) => console.error("Failed to trigger processing:", err));
+    if (call.engagementId) {
+      const appUrl = (process.env.WEB_URL || "").replace(/\/+$/, "");
+      if (appUrl) {
+        fetch(
+          `${appUrl}/api/engagements/${call.engagementId}/discovery/${call.id}/process`,
+          { method: "POST" }
+        ).catch((err) => console.error("Failed to trigger processing:", err));
+      }
     }
   }
 }
@@ -214,6 +345,9 @@ async function handleCallDone(data: any) {
     where: { recallBotId: bot_id },
   });
   if (!call) return;
+
+  // Skip if already finalized (handleStatusChange may have triggered processing)
+  if (call.structuredData) return;
 
   await prisma.discoveryCall.update({
     where: { id: call.id },
@@ -228,8 +362,10 @@ async function handleCallDone(data: any) {
     },
   });
 
+  publishCallEvent(call.id, { type: "status", data: { status: "COMPLETED" } });
+
   const segments = await prisma.transcriptSegment.findMany({
-    where: { discoveryCallId: call.id },
+    where: { discoveryCallId: call.id, isFinal: true },
     orderBy: { startTime: "asc" },
   });
 
@@ -245,11 +381,13 @@ async function handleCallDone(data: any) {
     data: { rawTranscript },
   });
 
-  const appUrl = (process.env.WEB_URL || "").replace(/\/+$/, "");
-  if (appUrl) {
-    fetch(
-      `${appUrl}/api/engagements/${call.engagementId}/discovery/${call.id}/process`,
-      { method: "POST", headers: { "x-final": "true" } }
-    ).catch((err) => console.error("Failed to trigger final processing:", err));
+  if (call.engagementId) {
+    const appUrl = (process.env.WEB_URL || "").replace(/\/+$/, "");
+    if (appUrl) {
+      fetch(
+        `${appUrl}/api/engagements/${call.engagementId}/discovery/${call.id}/process`,
+        { method: "POST", headers: { "x-final": "true" } }
+      ).catch((err) => console.error("Failed to trigger final processing:", err));
+    }
   }
 }

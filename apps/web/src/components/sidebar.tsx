@@ -8,6 +8,7 @@ import {
   Rocket,
   BookOpen,
   MessageSquare,
+  Phone,
   Settings,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -15,6 +16,7 @@ import { cn } from "@/lib/utils";
 const navigation = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { name: "Engagements", href: "/engagements", icon: Briefcase },
+  { name: "Calls", href: "/calls", icon: Phone },
   { name: "Projects", href: "/projects", icon: Rocket },
   { name: "Corpus", href: "/corpus", icon: BookOpen },
   { name: "Chat", href: "/chat", icon: MessageSquare },

@@ -3,3 +3,9 @@ export { getRedis, createRedisSubscriber } from "./redis";
 export { encrypt, decrypt } from "./crypto";
 export * from "./types";
 export * as pipeline from "./pipeline";
+export {
+  publishCallEvent,
+  callChannel,
+  type CallEvent,
+  type CallEventType,
+} from "./call-events";

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Trash2 } from "lucide-react";
+import { Trash2, CheckCircle2, Sparkles } from "lucide-react";
 import { StatusBadge } from "@/components/status-badge";
 import { SendBotDialog } from "@/components/discovery/send-bot-dialog";
 import { AddDiscoveryDialog } from "@/components/add-discovery-dialog";
@@ -43,12 +43,14 @@ interface DiscoveryTabProps {
   engagementId: string;
   clientName: string;
   initialCalls: DiscoveryCall[];
+  hasBuildPlan: boolean;
 }
 
 export function DiscoveryTab({
   engagementId,
   clientName,
   initialCalls,
+  hasBuildPlan,
 }: DiscoveryTabProps) {
   const router = useRouter();
   const [calls, setCalls] = useState(initialCalls);
@@ -92,6 +94,44 @@ export function DiscoveryTab({
           </div>
         </CardHeader>
         <CardContent>
+          {(() => {
+            const completedCalls = calls.filter((c) => c.status === "COMPLETED");
+            const activeCalls = calls.filter((c) => c.status === "IN_PROGRESS" || c.status === "WAITING");
+            const allDone = calls.length > 0 && activeCalls.length === 0 && completedCalls.length > 0;
+            const totalInsights = completedCalls.reduce((sum, c) => sum + c._count.insights, 0);
+
+            if (allDone && !hasBuildPlan) {
+              return (
+                <div className="mb-4 flex items-center justify-between rounded-lg border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-800 dark:bg-emerald-950/30">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                    <div>
+                      <p className="text-sm font-medium text-emerald-900 dark:text-emerald-100">
+                        Discovery complete
+                      </p>
+                      <p className="text-xs text-emerald-700 dark:text-emerald-300">
+                        {completedCalls.length} call{completedCalls.length !== 1 ? "s" : ""} with {totalInsights} insight{totalInsights !== 1 ? "s" : ""} captured
+                      </p>
+                    </div>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="border-emerald-300 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-700 dark:text-emerald-300 dark:hover:bg-emerald-900"
+                    onClick={() => {
+                      const trigger = document.querySelector('[value="build-plan"]') as HTMLElement;
+                      trigger?.click();
+                    }}
+                  >
+                    <Sparkles className="h-3.5 w-3.5 mr-1.5" />
+                    Generate Build Plan
+                  </Button>
+                </div>
+              );
+            }
+            return null;
+          })()}
+
           {calls.length === 0 ? (
             <p className="text-sm text-muted-foreground py-8 text-center">
               No discovery calls yet. Send Rex to a meeting or add notes

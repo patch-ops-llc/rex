@@ -1,10 +1,12 @@
 import { NextRequest } from "next/server";
-import { prisma } from "@rex/shared";
+import { prisma, createRedisSubscriber, callChannel } from "@rex/shared";
+import type { CallEvent } from "@rex/shared";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const POLL_INTERVAL_MS = 3000;
+const POLL_FAST_MS = 1000;
+const POLL_SLOW_MS = 10000;
 const RECALL_POLL_INTERVAL_MS = 10000;
 
 const RECALL_API_BASE =
@@ -59,8 +61,9 @@ export async function GET(
   }
 
   const encoder = new TextEncoder();
-  let poll: ReturnType<typeof setInterval> | null = null;
+  let fallbackPoll: ReturnType<typeof setInterval> | null = null;
   let recallPoll: ReturnType<typeof setInterval> | null = null;
+  let redisSub: ReturnType<typeof createRedisSubscriber> = null;
   let closed = false;
 
   const stream = new ReadableStream({
@@ -76,7 +79,7 @@ export async function GET(
         }
       };
 
-      const [segments, insights] = await Promise.all([
+      const [segments, insights, agendaItems] = await Promise.all([
         prisma.transcriptSegment.findMany({
           where: { discoveryCallId: params.callId },
           orderBy: { startTime: "asc" },
@@ -85,7 +88,22 @@ export async function GET(
           where: { discoveryCallId: params.callId },
           orderBy: { createdAt: "asc" },
         }),
+        prisma.callAgendaItem.findMany({
+          where: { discoveryCallId: params.callId },
+          orderBy: { displayOrder: "asc" },
+        }),
       ]);
+
+      const mapAgendaItem = (a: typeof agendaItems[number]) => ({
+        id: a.id,
+        title: a.title,
+        description: a.description,
+        status: a.status,
+        displayOrder: a.displayOrder,
+        notes: a.notes,
+        resolvedAt: a.resolvedAt?.toISOString() || null,
+        relatedInsights: a.relatedInsights,
+      });
 
       send("init", {
         status: call.status,
@@ -110,20 +128,81 @@ export async function GET(
           confidence: i.confidence,
           metadata: i.metadata,
         })),
+        agendaItems: agendaItems.map(mapAgendaItem),
       });
 
-      let knownSegmentIds = new Set(segments.map((s) => s.id));
-      let knownInsightIds = new Set(insights.map((i) => i.id));
+      const knownSegmentIds = new Set(segments.map((s) => s.id));
+      const knownInsightIds = new Set(insights.map((i) => i.id));
+      const agendaVersions = new Map(
+        agendaItems.map((a) => [a.id, `${a.status}|${a.updatedAt.getTime()}`])
+      );
       let lastStatus = call.status;
 
-      poll = setInterval(async () => {
+      // --- Redis subscription for instant push ---
+      const channel = callChannel(params.callId);
+      redisSub = createRedisSubscriber();
+      let redisConnected = false;
+
+      if (redisSub) {
+        redisSub.subscribe(channel).then(() => { redisConnected = true; }).catch(() => {});
+
+        redisSub.on("message", (_ch: string, message: string) => {
+          if (closed) return;
+          try {
+            const event: CallEvent = JSON.parse(message);
+
+            if (event.type === "transcript") {
+              const { segment } = event.data as any;
+              if (segment?.id) {
+                knownSegmentIds.add(segment.id);
+                send("transcript", { segment });
+              }
+            } else if (event.type === "insight") {
+              const { insight } = event.data as any;
+              if (insight?.id) {
+                knownInsightIds.add(insight.id);
+                send("insight", { insight });
+              }
+            } else if (event.type === "agenda") {
+              const { item } = event.data as any;
+              if (item?.id) {
+                agendaVersions.set(item.id, `${item.status}|${Date.now()}`);
+                send("agenda", { item });
+              }
+            } else if (event.type === "suggestion") {
+              const { suggestion } = event.data as any;
+              if (suggestion) {
+                send("suggestion", { suggestion });
+              }
+            } else if (event.type === "voice") {
+              send("voice", event.data);
+            } else if (event.type === "status") {
+              const { status } = event.data as any;
+              if (status && status !== lastStatus) {
+                lastStatus = status;
+                send("status", { status });
+              }
+            } else if (event.type === "processing") {
+              send("processing", event.data);
+            } else if (event.type === "call_ended") {
+              send("call_ended", event.data);
+            }
+          } catch {
+            // Malformed message — ignore
+          }
+        });
+      }
+
+      // --- DB poll: fast (1s) without Redis, slow (10s) as safety net with Redis ---
+      const pollMs = redisConnected ? POLL_SLOW_MS : POLL_FAST_MS;
+      fallbackPoll = setInterval(async () => {
         if (closed) {
-          if (poll) clearInterval(poll);
+          if (fallbackPoll) clearInterval(fallbackPoll);
           return;
         }
 
         try {
-          const [newSegments, newInsights, currentCall] = await Promise.all([
+          const [newSegments, newInsights, currentCall, currentAgenda] = await Promise.all([
             prisma.transcriptSegment.findMany({
               where: {
                 discoveryCallId: params.callId,
@@ -141,6 +220,10 @@ export async function GET(
             prisma.discoveryCall.findUnique({
               where: { id: params.callId },
               select: { status: true, startedAt: true },
+            }),
+            prisma.callAgendaItem.findMany({
+              where: { discoveryCallId: params.callId },
+              orderBy: { displayOrder: "asc" },
             }),
           ]);
 
@@ -173,20 +256,32 @@ export async function GET(
             });
           }
 
+          for (const a of currentAgenda) {
+            const version = `${a.status}|${a.updatedAt.getTime()}`;
+            if (agendaVersions.get(a.id) !== version) {
+              agendaVersions.set(a.id, version);
+              send("agenda", { item: mapAgendaItem(a) });
+            }
+          }
+
           if (currentCall && currentCall.status !== lastStatus) {
             lastStatus = currentCall.status;
             send("status", { status: lastStatus });
           }
 
           if (lastStatus === "COMPLETED" || lastStatus === "FAILED") {
-            if (poll) clearInterval(poll);
             if (recallPoll) clearInterval(recallPoll);
           }
-        } catch (err) {
-          console.error("Display stream poll error:", err);
-        }
-      }, POLL_INTERVAL_MS);
 
+          if (lastStatus === "FAILED") {
+            if (fallbackPoll) clearInterval(fallbackPoll);
+          }
+        } catch (err) {
+          console.error("Display stream fallback poll error:", err);
+        }
+      }, pollMs);
+
+      // --- Recall bot status sync ---
       if (
         call.recallBotId &&
         call.status !== "COMPLETED" &&
@@ -242,8 +337,13 @@ export async function GET(
 
     cancel() {
       closed = true;
-      if (poll) clearInterval(poll);
+      if (fallbackPoll) clearInterval(fallbackPoll);
       if (recallPoll) clearInterval(recallPoll);
+      if (redisSub) {
+        redisSub.unsubscribe().catch(() => {});
+        redisSub.quit().catch(() => {});
+        redisSub = null;
+      }
     },
   });
 

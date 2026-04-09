@@ -27,7 +27,11 @@ export type {
   DeliveryLogEntry,
   TranscriptSegment,
   CallInsight,
+  CallAgendaItem,
   CustomProject,
+  CalendarAccount,
+  CalendarEvent,
+  EngagementContact,
 } from "@prisma/client";
 
 export {
@@ -49,8 +53,10 @@ export {
   RequirementStatus,
   UATStatus,
   InsightType,
+  AgendaItemStatus,
   ProjectDeployStatus,
   WalkthroughStatus,
+  CalendarProvider,
 } from "@prisma/client";
 
 // ============================================================
@@ -519,11 +525,57 @@ export interface CallSSEProcessingEvent {
   insightsCount?: number;
 }
 
+export interface CallSSEAgendaEvent {
+  type: "agenda";
+  item: {
+    id: string;
+    title: string;
+    description: string | null;
+    status: string;
+    displayOrder: number;
+    notes: string | null;
+    resolvedAt: string | null;
+    relatedInsights: string[] | null;
+  };
+}
+
+export interface CallSSESuggestionEvent {
+  type: "suggestion";
+  suggestion: CallSuggestion;
+}
+
+export interface CallSSEVoiceEvent {
+  type: "voice";
+  text: string;
+  triggeredBy: string;
+  question: string;
+  timestamp: number;
+}
+
+export interface CallSSECallEndedEvent {
+  type: "call_ended";
+  summary: string | null;
+  insightCounts: {
+    total: number;
+    requirements: number;
+    actionItems: number;
+    decisions: number;
+    scopeConcerns: number;
+    openQuestions: number;
+  };
+  duration: number | null;
+  segmentCount: number;
+}
+
 export type CallSSEEvent =
   | CallSSETranscriptEvent
   | CallSSEInsightEvent
   | CallSSEStatusEvent
-  | CallSSEProcessingEvent;
+  | CallSSEProcessingEvent
+  | CallSSEAgendaEvent
+  | CallSSESuggestionEvent
+  | CallSSEVoiceEvent
+  | CallSSECallEndedEvent;
 
 // ============================================================
 // CALL INTELLIGENCE — AI PROCESSING TYPES
@@ -538,8 +590,27 @@ export interface ExtractedInsight {
   metadata?: Record<string, unknown>;
 }
 
+export interface CallSuggestion {
+  id?: string;
+  suggestionType: "question" | "coaching_tip" | "topic_prompt";
+  content: string;
+  reasoning: string;
+  priority: "high" | "medium" | "low";
+  relatedAgendaItemId?: string;
+  expiresAfterSeconds?: number;
+}
+
+export interface AgendaResolution {
+  agendaItemId: string;
+  status: "ACTIVE" | "RESOLVED" | "PARTIALLY_RESOLVED";
+  notes: string;
+  relatedInsightIndices: number[];
+}
+
 export interface CallProcessingResult {
   insights: ExtractedInsight[];
+  agendaUpdates?: AgendaResolution[];
+  suggestions?: CallSuggestion[];
   summary?: string;
 }
 

@@ -26,6 +26,7 @@ model Engagement {
 
   hubspotPortals     HubSpotPortal[]
   discoveryCalls     DiscoveryCall[]
+  contacts           EngagementContact[]
   buildPlan          BuildPlan?
   implementations    Implementation[]
   qaItems            QAItem[]
@@ -63,30 +64,34 @@ enum EngagementStatus {
 // ============================================================
 
 model DiscoveryCall {
-  id             String     @id @default(cuid())
-  engagementId   String
-  engagement     Engagement @relation(fields: [engagementId], references: [id])
-  meetingUrl     String?
-  recallBotId    String?
-  sessionId      String?    @unique
-  platform       String?
-  title          String?
-  status         CallStatus @default(SCHEDULED)
-  autonomyLevel  Int        @default(1)
-  rawTranscript  Json?
-  structuredData Json?
-  decisionTree   Json?
-  summary        String?
+  id              String     @id @default(cuid())
+  engagementId    String?
+  engagement      Engagement? @relation(fields: [engagementId], references: [id])
+  calendarEventId String?
+  calendarEvent   CalendarEvent? @relation(fields: [calendarEventId], references: [id])
+  meetingUrl      String?
+  recallBotId     String?
+  sessionId       String?    @unique
+  platform        String?
+  title           String?
+  status          CallStatus @default(SCHEDULED)
+  autonomyLevel   Int        @default(1)
+  rawTranscript   Json?
+  structuredData  Json?
+  decisionTree    Json?
+  summary         String?
   speakerProfiles Json?
-  duration       Int?
-  startedAt      DateTime?
-  endedAt        DateTime?
+  attendeeEmails  String[]
+  duration        Int?
+  startedAt       DateTime?
+  endedAt         DateTime?
   lastProcessedAt DateTime?
-  createdAt      DateTime   @default(now())
-  updatedAt      DateTime   @updatedAt
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
 
   segments       TranscriptSegment[]
   insights       CallInsight[]
+  agendaItems    CallAgendaItem[]
 }
 
 // ============================================================
@@ -104,8 +109,10 @@ model TranscriptSegment {
   confidence      Float?
   isFinal         Boolean       @default(false)
   createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
 
   @@index([discoveryCallId, startTime])
+  @@index([discoveryCallId, updatedAt])
 }
 
 // ============================================================
@@ -144,6 +151,35 @@ enum CallStatus {
   IN_PROGRESS
   COMPLETED
   FAILED
+}
+
+// ============================================================
+// CALL AGENDA — Pre-loaded topics resolved during the call
+// ============================================================
+
+model CallAgendaItem {
+  id              String            @id @default(cuid())
+  discoveryCallId String
+  discoveryCall   DiscoveryCall     @relation(fields: [discoveryCallId], references: [id], onDelete: Cascade)
+  title           String
+  description     String?
+  status          AgendaItemStatus  @default(PENDING)
+  displayOrder    Int               @default(0)
+  notes           String?
+  resolvedAt      DateTime?
+  relatedInsights Json?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@index([discoveryCallId, displayOrder])
+}
+
+enum AgendaItemStatus {
+  PENDING
+  ACTIVE
+  RESOLVED
+  PARTIALLY_RESOLVED
+  SKIPPED
 }
 
 // ============================================================
@@ -744,4 +780,69 @@ enum AlertStatus {
   ACKNOWLEDGED
   RESOLVED
   DISMISSED
+}
+
+// ============================================================
+// CALENDAR INTEGRATION
+// ============================================================
+
+model CalendarAccount {
+  id            String          @id @default(cuid())
+  provider      CalendarProvider @default(GOOGLE)
+  email         String          @unique
+  accessToken   String
+  refreshToken  String
+  tokenExpiry   DateTime
+  calendarId    String          @default("primary")
+  syncChannelId String?
+  syncExpiry    DateTime?
+  isActive      Boolean         @default(true)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  events CalendarEvent[]
+}
+
+enum CalendarProvider {
+  GOOGLE
+  MICROSOFT
+}
+
+model CalendarEvent {
+  id                String          @id @default(cuid())
+  calendarAccountId String
+  calendarAccount   CalendarAccount @relation(fields: [calendarAccountId], references: [id], onDelete: Cascade)
+  externalEventId   String
+  title             String?
+  meetingUrl        String?
+  startTime         DateTime
+  endTime           DateTime
+  attendeeEmails    String[]
+  organizerEmail    String?
+  botDispatched     Boolean         @default(false)
+  engagementId      String?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  calls DiscoveryCall[]
+
+  @@unique([calendarAccountId, externalEventId])
+  @@index([startTime])
+}
+
+// ============================================================
+// ENGAGEMENT CONTACTS — Email-based matching for auto-association
+// ============================================================
+
+model EngagementContact {
+  id           String     @id @default(cuid())
+  engagementId String
+  engagement   Engagement @relation(fields: [engagementId], references: [id], onDelete: Cascade)
+  email        String
+  name         String?
+  role         String?
+  createdAt    DateTime   @default(now())
+
+  @@unique([engagementId, email])
+  @@index([email])
 }
