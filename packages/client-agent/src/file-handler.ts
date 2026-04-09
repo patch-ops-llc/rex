@@ -157,7 +157,7 @@ async function triggerScopeProcessing(
   channelId: string,
   client: any
 ) {
-  const webUrl = process.env.REX_WEB_URL || "https://rex-web.up.railway.app";
+  const webUrl = process.env.REX_WEB_URL || "https://display-production-6b60.up.railway.app";
   const apiSecret = process.env.REX_INTERNAL_API_SECRET;
 
   try {

@@ -27,7 +27,7 @@ features:
 
 oauth_config:
   redirect_urls:
-    - https://rex-web.up.railway.app/api/slack/callback
+    - https://display-production-6b60.up.railway.app/api/slack/callback
   scopes:
     bot:
       - app_mentions:read
