@@ -260,6 +260,9 @@ importers:
 
   packages/client-agent:
     dependencies:
+      '@anthropic-ai/sdk':
+        specifier: ^0.39
+        version: 0.39.0
       '@rex/shared':
         specifier: workspace:*
         version: link:../shared

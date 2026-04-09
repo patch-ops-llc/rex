@@ -13,7 +13,12 @@ export function registerFileHandler(app: App) {
       const file = fileInfo.file;
 
       if (!file || !file.name) {
-        log({ level: "warn", service: SERVICE, message: "file_shared event with no file info", meta: { file_id } });
+        log({
+          level: "warn",
+          service: SERVICE,
+          message: "file_shared event with no file info",
+          meta: { file_id },
+        });
         return;
       }
 
@@ -47,7 +52,12 @@ export function registerFileHandler(app: App) {
         where: { slackFileId: file_id },
       });
       if (existingDoc) {
-        log({ level: "debug", service: SERVICE, message: "Duplicate file_shared event, skipping", meta: { file_id } });
+        log({
+          level: "debug",
+          service: SERVICE,
+          message: "Duplicate file_shared event, skipping",
+          meta: { file_id },
+        });
         return;
       }
 
@@ -64,9 +74,27 @@ export function registerFileHandler(app: App) {
         },
       });
 
-      await client.chat.postMessage({
+      const statusMsg = await client.chat.postMessage({
         channel: channel_id,
-        text: `📄 Received *${file.name}* — parsing now...`,
+        blocks: [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: `*${file.name}*\nParsing document...`,
+            },
+          },
+          {
+            type: "context",
+            elements: [
+              {
+                type: "mrkdwn",
+                text: `Engagement: ${mapping.engagementName}`,
+              },
+            ],
+          },
+        ],
+        text: `Received ${file.name} — parsing now...`,
       });
 
       await prisma.scopeDocument.update({
@@ -78,38 +106,67 @@ export function registerFileHandler(app: App) {
 
       await prisma.scopeDocument.update({
         where: { id: doc.id },
-        data: {
-          rawText,
-          status: "PARSED",
-        },
+        data: { rawText, status: "PARSED" },
       });
 
-      const charCount = rawText.length;
       const wordCount = rawText.split(/\s+/).filter(Boolean).length;
 
-      await client.chat.postMessage({
-        channel: channel_id,
-        text: `📄 *${file.name}* parsed (${wordCount.toLocaleString()} words) — extracting scope now...`,
-      });
+      if (statusMsg.ts) {
+        await client.chat.update({
+          channel: channel_id,
+          ts: statusMsg.ts,
+          blocks: [
+            {
+              type: "section",
+              text: {
+                type: "mrkdwn",
+                text: `*${file.name}*\nParsed (${wordCount.toLocaleString()} words) — extracting scope...`,
+              },
+            },
+            {
+              type: "context",
+              elements: [
+                {
+                  type: "mrkdwn",
+                  text: `Engagement: ${mapping.engagementName}`,
+                },
+              ],
+            },
+          ],
+          text: `Parsed ${file.name} (${wordCount.toLocaleString()} words) — extracting scope...`,
+        });
+      }
 
       log({
         level: "info",
         service: SERVICE,
         message: "Scope document ingested, triggering AI processing",
         engagementId: mapping.engagementId,
-        meta: { documentId: doc.id, fileName: file.name, wordCount, charCount },
+        meta: {
+          documentId: doc.id,
+          fileName: file.name,
+          wordCount,
+          charCount: rawText.length,
+        },
       });
 
       triggerScopeProcessing(
         mapping.engagementId,
+        mapping.engagementName,
         doc.id,
         file.name,
         channel_id,
+        statusMsg.ts ?? undefined,
         client
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      log({ level: "error", service: SERVICE, message: "File processing failed", meta: { file_id, error: message } });
+      log({
+        level: "error",
+        service: SERVICE,
+        message: "File processing failed",
+        meta: { file_id, error: message },
+      });
 
       await prisma.scopeDocument
         .updateMany({
@@ -121,17 +178,23 @@ export function registerFileHandler(app: App) {
       await client.chat
         .postMessage({
           channel: channel_id,
-          text: `⚠️ Failed to process the uploaded file. Error: ${message}`,
+          blocks: [
+            {
+              type: "section",
+              text: {
+                type: "mrkdwn",
+                text: `*Failed to process file*\n${message}`,
+              },
+            },
+          ],
+          text: `Failed to process the uploaded file: ${message}`,
         })
         .catch(() => {});
     }
   });
 }
 
-async function downloadAndParse(
-  client: any,
-  file: any
-): Promise<string> {
+async function downloadAndParse(client: any, file: any): Promise<string> {
   const url = file.url_private_download ?? file.url_private;
   if (!url) throw new Error("No download URL available for file");
 
@@ -141,7 +204,9 @@ async function downloadAndParse(
   });
 
   if (!response.ok) {
-    throw new Error(`Failed to download file: ${response.status} ${response.statusText}`);
+    throw new Error(
+      `Failed to download file: ${response.status} ${response.statusText}`
+    );
   }
 
   const arrayBuffer = await response.arrayBuffer();
@@ -152,12 +217,16 @@ async function downloadAndParse(
 
 async function triggerScopeProcessing(
   engagementId: string,
+  engagementName: string,
   documentId: string,
   fileName: string,
   channelId: string,
+  statusTs: string | undefined,
   client: any
 ) {
-  const webUrl = process.env.REX_WEB_URL || "https://display-production-6b60.up.railway.app";
+  const webUrl =
+    process.env.REX_WEB_URL ||
+    "https://display-production-6b60.up.railway.app";
   const apiSecret = process.env.REX_INTERNAL_API_SECRET;
 
   try {
@@ -177,36 +246,72 @@ async function triggerScopeProcessing(
       throw new Error(`${res.status}: ${body}`);
     }
 
-    const result = await res.json();
+    const result: any = await res.json();
     const workstreamCount = result.parsedData?.workstreams?.length || 0;
-    const parts: string[] = [
-      `✅ *${fileName}* — scope extracted successfully`,
-    ];
+
+    const summaryParts: string[] = [`*${fileName}* — scope extracted`];
 
     if (workstreamCount > 0) {
-      parts.push(`• ${workstreamCount} workstream${workstreamCount !== 1 ? "s" : ""} identified`);
+      summaryParts.push("");
+      summaryParts.push(
+        `*${workstreamCount} workstream${workstreamCount !== 1 ? "s" : ""}*`
+      );
       for (const ws of result.parsedData.workstreams) {
-        const hours = ws.allocatedHours ? ` (${ws.allocatedHours}h)` : "";
-        parts.push(`  → ${ws.name}${hours}`);
+        const hours = ws.allocatedHours ? ` — ${ws.allocatedHours}h` : "";
+        summaryParts.push(`  • ${ws.name}${hours}`);
       }
     }
 
+    const metaParts: string[] = [];
     if (result.parsedData?.totalHours) {
-      parts.push(`• ${result.parsedData.totalHours}h total`);
+      metaParts.push(`${result.parsedData.totalHours}h total`);
     }
-
     if (result.parsedData?.outOfScope?.length) {
-      parts.push(`• ${result.parsedData.outOfScope.length} out-of-scope item${result.parsedData.outOfScope.length !== 1 ? "s" : ""} captured`);
+      metaParts.push(
+        `${result.parsedData.outOfScope.length} out-of-scope item${result.parsedData.outOfScope.length !== 1 ? "s" : ""}`
+      );
     }
-
     if (result.sowCreated) {
-      parts.push(`\n📋 SOW auto-created with ${result.lineItemsCreated} workstream${result.lineItemsCreated !== 1 ? "s" : ""}`);
+      metaParts.push(
+        `SOW created with ${result.lineItemsCreated} line item${result.lineItemsCreated !== 1 ? "s" : ""}`
+      );
     }
 
-    await client.chat.postMessage({
-      channel: channelId,
-      text: parts.join("\n"),
-    });
+    const blocks: any[] = [
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: summaryParts.join("\n") },
+      },
+    ];
+
+    if (metaParts.length > 0) {
+      blocks.push({
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: metaParts.join("  |  ") +
+              `  |  Engagement: ${engagementName}`,
+          },
+        ],
+      });
+    }
+
+    const fallbackText = summaryParts.join("\n");
+    if (statusTs) {
+      await client.chat.update({
+        channel: channelId,
+        ts: statusTs,
+        blocks,
+        text: fallbackText,
+      });
+    } else {
+      await client.chat.postMessage({
+        channel: channelId,
+        blocks,
+        text: fallbackText,
+      });
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log({
@@ -217,10 +322,44 @@ async function triggerScopeProcessing(
       meta: { documentId, error: message },
     });
 
-    await client.chat.postMessage({
-      channel: channelId,
-      text: `⚠️ Parsed *${fileName}* but scope extraction failed: ${message}\nThe raw text is saved — you can retry from the Rex dashboard.`,
-    }).catch(() => {});
+    const errorBlocks = [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `*${fileName}* — parsed but scope extraction failed\n${message}`,
+        },
+      },
+      {
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: "Raw text is saved — retry from the Rex dashboard",
+          },
+        ],
+      },
+    ];
+
+    const fallback = `Parsed ${fileName} but scope extraction failed: ${message}`;
+    if (statusTs) {
+      await client.chat
+        .update({
+          channel: channelId,
+          ts: statusTs,
+          blocks: errorBlocks,
+          text: fallback,
+        })
+        .catch(() => {});
+    } else {
+      await client.chat
+        .postMessage({
+          channel: channelId,
+          blocks: errorBlocks,
+          text: fallback,
+        })
+        .catch(() => {});
+    }
   }
 }
 
