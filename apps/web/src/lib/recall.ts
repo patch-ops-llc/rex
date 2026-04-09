@@ -22,6 +22,7 @@ export interface RecallBotConfig {
       provider?: {
         recallai_streaming?: {
           mode?: "prioritize_low_latency" | "prioritize_accuracy";
+          language_code?: string;
         };
         meeting_captions?: Record<string, never>;
       };
