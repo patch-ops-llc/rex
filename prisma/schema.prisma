@@ -109,7 +109,7 @@ model TranscriptSegment {
   confidence      Float?
   isFinal         Boolean       @default(false)
   createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  updatedAt       DateTime      @default(now()) @updatedAt
 
   @@index([discoveryCallId, startTime])
   @@index([discoveryCallId, updatedAt])
