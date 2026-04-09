@@ -152,6 +152,9 @@ importers:
       '@radix-ui/react-tabs':
         specifier: ^1
         version: 1.1.13(@types/react-dom@18.3.7(@types/react@18.3.28))(@types/react@18.3.28)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      '@rex/build-plan-generator':
+        specifier: workspace:*
+        version: link:../../packages/build-plan-generator
       '@rex/enablement':
         specifier: workspace:*
         version: link:../../packages/enablement

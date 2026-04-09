@@ -20,6 +20,7 @@
     "@radix-ui/react-select": "^2",
     "@radix-ui/react-slot": "^1",
     "@radix-ui/react-tabs": "^1",
+    "@rex/build-plan-generator": "workspace:*",
     "@rex/enablement": "workspace:*",
     "@rex/shared": "workspace:*",
     "@slack/web-api": "^7.15.0",
