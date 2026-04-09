@@ -73,11 +73,7 @@ export async function POST(
           {
             type: "webhook",
             url: `${appUrl}/api/webhooks/recall`,
-            events: [
-              "bot.status_change",
-              "transcript.data",
-              "transcript.partial_data",
-            ],
+            events: ["transcript.data", "transcript.partial_data"],
           },
         ],
       },
