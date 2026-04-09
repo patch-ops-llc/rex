@@ -210,6 +210,18 @@ export default function LiveDashboardPage({
     };
   }, [connect]);
 
+  // End session
+  const endSession = useCallback(async () => {
+    const res = await fetch(
+      `/api/engagements/${params.id}/discovery/${params.callId}/stop`,
+      { method: "POST" }
+    );
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      console.error("Failed to end session:", data.error);
+    }
+  }, [params.id, params.callId]);
+
   // Fullscreen toggle
   const toggleFullscreen = useCallback(() => {
     if (!document.fullscreenElement) {
@@ -257,6 +269,7 @@ export default function LiveDashboardPage({
         connected={state.connected}
         isFullscreen={isFullscreen}
         onToggleFullscreen={toggleFullscreen}
+        onEndSession={endSession}
       />
 
       <div className="flex flex-1 overflow-hidden">

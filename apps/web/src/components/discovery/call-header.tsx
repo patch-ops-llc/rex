@@ -9,6 +9,8 @@ import {
   Minimize,
   Wifi,
   WifiOff,
+  Square,
+  Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -22,6 +24,7 @@ interface CallHeaderProps {
   connected: boolean;
   isFullscreen: boolean;
   onToggleFullscreen: () => void;
+  onEndSession?: () => Promise<void>;
 }
 
 export function CallHeader({
@@ -34,6 +37,7 @@ export function CallHeader({
   connected,
   isFullscreen,
   onToggleFullscreen,
+  onEndSession,
 }: CallHeaderProps) {
   const [elapsed, setElapsed] = useState("00:00:00");
 
@@ -56,7 +60,19 @@ export function CallHeader({
     return () => clearInterval(interval);
   }, [startedAt, status]);
 
+  const [stopping, setStopping] = useState(false);
   const isLive = status === "IN_PROGRESS";
+  const canEnd = isLive || status === "WAITING";
+
+  async function handleEnd() {
+    if (!onEndSession || stopping) return;
+    setStopping(true);
+    try {
+      await onEndSession();
+    } finally {
+      setStopping(false);
+    }
+  }
 
   return (
     <header className="flex items-center justify-between border-b border-zinc-800 bg-zinc-950 px-6 py-3">
@@ -114,6 +130,26 @@ export function CallHeader({
           )}
           <span>{connected ? "Connected" : "Reconnecting..."}</span>
         </div>
+
+        {canEnd && onEndSession && (
+          <button
+            onClick={handleEnd}
+            disabled={stopping}
+            className={cn(
+              "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition",
+              stopping
+                ? "bg-zinc-800 text-zinc-500"
+                : "bg-red-600 text-white hover:bg-red-700"
+            )}
+          >
+            {stopping ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Square className="h-3 w-3 fill-current" />
+            )}
+            {stopping ? "Ending..." : "End Session"}
+          </button>
+        )}
 
         <button
           onClick={onToggleFullscreen}
