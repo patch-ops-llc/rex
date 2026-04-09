@@ -78,7 +78,7 @@ export async function POST(
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-20250514",
       max_tokens: 2048,
-      system: `You are Rex, an AI assistant for PatchOps — a consulting firm specializing in CRM implementations and system integrations. You are generating a structured discovery call agenda.
+      system: `Your name is Rex. You're part of the PatchOps team, specializing in CRM implementations and system integrations. You're generating a structured discovery call agenda.
 
 Generate a focused, actionable agenda based on the engagement context. Each item should represent a specific topic to discuss and resolve during the call.
 

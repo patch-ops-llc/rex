@@ -61,16 +61,38 @@ export async function POST(
       },
     });
 
+    const deepgramKey = process.env.DEEPGRAM_API_KEY;
+
+    const transcriptProvider: NonNullable<
+      NonNullable<Parameters<typeof createBot>[0]["recording_config"]>["transcript"]
+    >["provider"] = deepgramKey
+      ? {
+          deepgram_streaming: {
+            api_key: deepgramKey,
+            language: "en",
+            model: "nova-3",
+            smart_format: true,
+            utterance_end_ms: "1500",
+            extra: { punctuate: true },
+          },
+        }
+      : {
+          recallai_streaming: {
+            mode: "prioritize_accuracy",
+            language_code: "en",
+          },
+        };
+
+    console.log(`Creating bot with transcription provider: ${deepgramKey ? "deepgram_streaming (nova-3)" : "recallai_streaming"}`);
+
     const botConfig: Parameters<typeof createBot>[0] = {
       meeting_url: meetingUrl,
       bot_name: "Rex",
       recording_config: {
         transcript: {
-          provider: {
-            recallai_streaming: {
-              mode: "prioritize_low_latency",
-              language_code: "en",
-            },
+          provider: transcriptProvider,
+          diarization: {
+            use_separate_streams_when_available: true,
           },
         },
         realtime_endpoints: [

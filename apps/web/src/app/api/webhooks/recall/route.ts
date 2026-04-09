@@ -4,6 +4,9 @@ import { isRexDirectedQuestion, handleRexVoiceResponse } from "@/lib/rex-voice";
 import { startScreenShare } from "@/lib/recall";
 
 const PROCESS_INTERVAL_SECONDS = 15;
+const MERGE_WINDOW_SECONDS = 10;
+const SHORT_SEGMENT_CHARS = 80;
+const SHORT_SEGMENT_MERGE_WINDOW = 30;
 
 export async function POST(request: NextRequest) {
   try {
@@ -168,8 +171,40 @@ async function handleRealtimeTranscript(data: any, isFinal: boolean) {
       orderBy: { createdAt: "desc" },
     });
 
+    // Check if we should merge with the most recent final segment.
+    // Only merge when the last final is from the same speaker and the gap is small,
+    // which means the ASR split a single utterance into multiple short finals.
+    const lastFinal = await prisma.transcriptSegment.findFirst({
+      where: { discoveryCallId: call.id, isFinal: true },
+      orderBy: { endTime: "desc" },
+    });
+
+    const gapSeconds = lastFinal ? startTime - lastFinal.endTime : Infinity;
+    const mergeWindow =
+      lastFinal && lastFinal.text.length < SHORT_SEGMENT_CHARS
+        ? SHORT_SEGMENT_MERGE_WINDOW
+        : MERGE_WINDOW_SECONDS;
+
+    const shouldMerge =
+      lastFinal &&
+      lastFinal.speaker === speaker &&
+      gapSeconds < mergeWindow;
+
     let segment;
-    if (existingPartial) {
+    if (shouldMerge) {
+      segment = await prisma.transcriptSegment.update({
+        where: { id: lastFinal.id },
+        data: {
+          text: `${lastFinal.text} ${text}`,
+          endTime,
+        },
+      });
+      if (existingPartial) {
+        await prisma.transcriptSegment
+          .delete({ where: { id: existingPartial.id } })
+          .catch(() => {});
+      }
+    } else if (existingPartial) {
       segment = await prisma.transcriptSegment.update({
         where: { id: existingPartial.id },
         data: { text, startTime, endTime, confidence: 1, isFinal: true },
@@ -198,9 +233,8 @@ async function handleRealtimeTranscript(data: any, isFinal: boolean) {
       },
     });
 
-    // Check if someone is addressing Rex directly — fire voice response (non-blocking)
-    if (isRexDirectedQuestion(text)) {
-      handleRexVoiceResponse(call.id, text, speaker).catch((err) =>
+    if (isRexDirectedQuestion(segment.text)) {
+      handleRexVoiceResponse(call.id, segment.text, speaker).catch((err) =>
         console.error("Rex voice response error:", err)
       );
     }

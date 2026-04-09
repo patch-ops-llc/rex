@@ -279,7 +279,7 @@ async function dispatchBotForEvent(
       transcript: {
         provider: {
           recallai_streaming: {
-            mode: "prioritize_low_latency",
+            mode: "prioritize_accuracy",
             language_code: "en",
           },
         },

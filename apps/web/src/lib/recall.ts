@@ -24,7 +24,18 @@ export interface RecallBotConfig {
           mode?: "prioritize_low_latency" | "prioritize_accuracy";
           language_code?: string;
         };
+        deepgram_streaming?: {
+          api_key: string;
+          language?: string;
+          model?: string;
+          smart_format?: boolean;
+          utterance_end_ms?: string;
+          extra?: Record<string, unknown>;
+        };
         meeting_captions?: Record<string, never>;
+      };
+      diarization?: {
+        use_separate_streams_when_available?: boolean;
       };
     };
     realtime_endpoints?: Array<{

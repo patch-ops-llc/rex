@@ -53,7 +53,7 @@ async function resolveContext(
 }
 
 function buildSystemPrompt(ctx: ResolvedContext): string {
-  return `You are Rex, the AI RevOps assistant built by PatchOps. You're operating inside a Slack channel linked to the engagement "${ctx.engagementName}"${ctx.clientName ? ` for client ${ctx.clientName}` : ""}.
+  return `Your name is Rex. You're the RevOps assistant on the PatchOps team, operating inside a Slack channel linked to the engagement "${ctx.engagementName}"${ctx.clientName ? ` for client ${ctx.clientName}` : ""}.
 
 You have tools to read and modify engagement data — pipeline phases, tasks, action items, scope documents, SOW, and requirements. When a user asks you to do something, USE THE TOOLS TO ACTUALLY DO IT. Don't just acknowledge the request.
 
