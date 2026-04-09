@@ -28,7 +28,7 @@ app.event("app_home_opened", async ({ event, client }) => {
           type: "section",
           text: {
             type: "mrkdwn",
-            text: "Upload scope documents (SOWs, proposals, contracts) directly to this channel or DM and Rex will automatically parse and store them.\n\n*Supported formats:*\n• PDF (.pdf)\n• Word (.docx)\n• Plain text (.txt)\n• Markdown (.md)\n• CSV (.csv)",
+            text: "Upload scope documents (SOWs, proposals, contracts) directly to this channel or DM. Rex will automatically parse them, extract structured scope, and set up your engagement.\n\n*Supported formats:*\n• PDF (.pdf)\n• Word (.docx)\n• Plain text (.txt)\n• Markdown (.md)\n• CSV (.csv)",
           },
         },
         { type: "divider" },
@@ -36,7 +36,7 @@ app.event("app_home_opened", async ({ event, client }) => {
           type: "section",
           text: {
             type: "mrkdwn",
-            text: "📄 *How to upload:*\n1. Drag & drop a file into this conversation\n2. Or click the + button and select a file\n3. Rex will automatically parse and link it to your engagement",
+            text: "📄 *How it works:*\n1. Drag & drop a SOW or scope document into this conversation\n2. Rex parses the document and extracts workstreams, hours, rates, and exclusions\n3. A structured SOW is auto-created on your engagement with line items\n4. Out-of-scope items and assumptions are captured for scope creep checks",
           },
         },
       ],

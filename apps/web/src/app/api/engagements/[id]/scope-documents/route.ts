@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma, SUPPORTED_SCOPE_FILE_TYPES } from "@rex/shared";
+import { processScopeDocument } from "@/lib/scope-processor";
 import pdf from "pdf-parse";
 import mammoth from "mammoth";
 
@@ -128,6 +129,10 @@ export async function POST(
       const updated = await prisma.scopeDocument.update({
         where: { id: doc.id },
         data: { rawText, status: "PARSED" },
+      });
+
+      processScopeDocument(doc.id).catch((err) => {
+        console.error("Background scope processing failed:", err);
       });
 
       return NextResponse.json(updated, { status: 201 });

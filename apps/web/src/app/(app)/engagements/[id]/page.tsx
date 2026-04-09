@@ -1,9 +1,8 @@
 import { notFound } from "next/navigation";
-import Link from "next/link";
 import { prisma } from "@rex/shared";
 import { StatusBadge } from "@/components/status-badge";
-import { AddDiscoveryDialog } from "@/components/add-discovery-dialog";
-import { SendBotDialog } from "@/components/discovery/send-bot-dialog";
+import { DeleteEngagementButton } from "@/components/delete-engagement-button";
+import { DiscoveryTab } from "@/components/discovery-tab";
 import { ScopeTab } from "@/components/scope-tab";
 import { PipelineView } from "@/components/pipeline-view";
 import { HubSpotConnectionCard } from "@/components/hubspot-connection-card";
@@ -160,7 +159,13 @@ export default async function EngagementDetailPage({
               ` · HubSpot ${engagement.hubspotTier}`}
           </p>
         </div>
-        <StatusBadge status={engagement.status} />
+        <div className="flex items-center gap-2">
+          <StatusBadge status={engagement.status} />
+          <DeleteEngagementButton
+            engagementId={engagement.id}
+            engagementName={engagement.name}
+          />
+        </div>
       </div>
 
       <HubSpotConnectionCard
@@ -267,134 +272,14 @@ export default async function EngagementDetailPage({
 
         {/* ── Discovery Tab ────────────────────────────────────────── */}
         <TabsContent value="discovery">
-          <Card>
-            <CardHeader className="flex flex-row items-start justify-between">
-              <div>
-                <CardTitle>Discovery</CardTitle>
-                <CardDescription>
-                  Discovery calls and captured requirements for this engagement.
-                </CardDescription>
-              </div>
-              <div className="flex items-center gap-2">
-                <SendBotDialog
-                  engagementId={engagement.id}
-                  clientName={engagement.clientName}
-                />
-                <AddDiscoveryDialog engagementId={engagement.id} />
-              </div>
-            </CardHeader>
-            <CardContent>
-              {engagement.discoveryCalls.length === 0 ? (
-                <p className="text-sm text-muted-foreground py-8 text-center">
-                  No discovery calls yet. Send Rex to a meeting or add notes
-                  manually.
-                </p>
-              ) : (
-                <div className="space-y-4">
-                  {engagement.discoveryCalls.map((call: any) => {
-                    const data = call.structuredData as any;
-                    const isBotCall = !!call.recallBotId;
-                    const isLive =
-                      call.status === "IN_PROGRESS" ||
-                      call.status === "WAITING";
-
-                    return (
-                      <div
-                        key={call.id}
-                        className="rounded-lg border p-4 space-y-2"
-                      >
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            {isBotCall && isLive && (
-                              <span className="relative flex h-2 w-2">
-                                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
-                                <span className="relative inline-flex h-2 w-2 rounded-full bg-red-500" />
-                              </span>
-                            )}
-                            <span className="text-sm font-medium">
-                              {call.title ||
-                                call.summary ||
-                                call.meetingUrl ||
-                                "Discovery Entry"}
-                            </span>
-                            {isBotCall && call.platform && (
-                              <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                                {call.platform === "google_meet"
-                                  ? "Google Meet"
-                                  : call.platform === "zoom"
-                                    ? "Zoom"
-                                    : call.platform === "teams"
-                                      ? "Teams"
-                                      : call.platform}
-                              </span>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-2">
-                            {isBotCall && (
-                              <span className="text-xs text-muted-foreground">
-                                {call._count.insights} insights
-                              </span>
-                            )}
-                            {data?.meetingDate && (
-                              <span className="text-xs text-muted-foreground">
-                                {new Date(
-                                  data.meetingDate
-                                ).toLocaleDateString("en-US", {
-                                  month: "short",
-                                  day: "numeric",
-                                  year: "numeric",
-                                })}
-                              </span>
-                            )}
-                            <StatusBadge status={call.status} />
-                          </div>
-                        </div>
-
-                        {isBotCall && (isLive || call.status === "COMPLETED") && (
-                          <Link
-                            href={`/engagements/${engagement.id}/discovery/${call.id}/live`}
-                            className="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"
-                          >
-                            {isLive
-                              ? "Open Live Dashboard"
-                              : "View Call Summary"}
-                          </Link>
-                        )}
-
-                        {data?.attendees && (
-                          <p className="text-xs text-muted-foreground">
-                            Attendees: {data.attendees}
-                          </p>
-                        )}
-                        {data?.notes && (
-                          <div className="rounded bg-muted p-3 text-sm whitespace-pre-wrap">
-                            {data.notes}
-                          </div>
-                        )}
-                        {!data?.notes && call.summary && (
-                          <p className="text-sm text-muted-foreground">
-                            {call.summary}
-                          </p>
-                        )}
-                        <p className="text-xs text-muted-foreground">
-                          {new Date(call.createdAt).toLocaleDateString(
-                            "en-US",
-                            {
-                              month: "short",
-                              day: "numeric",
-                              year: "numeric",
-                              hour: "numeric",
-                              minute: "2-digit",
-                            }
-                          )}
-                        </p>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </CardContent>
-          </Card>
+          <DiscoveryTab
+            engagementId={engagement.id}
+            clientName={engagement.clientName}
+            initialCalls={engagement.discoveryCalls.map((call: any) => ({
+              ...call,
+              createdAt: call.createdAt.toISOString(),
+            }))}
+          />
         </TabsContent>
 
         {/* ── Build Plan Tab ───────────────────────────────────────── */}

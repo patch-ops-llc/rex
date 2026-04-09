@@ -88,6 +88,28 @@ interface ScopeAlertData {
   createdAt: string;
 }
 
+interface ParsedWorkstreamData {
+  name: string;
+  description?: string;
+  allocatedHours?: number;
+  rateTier?: string;
+  hourlyRate?: number;
+  deliverables?: string[];
+}
+
+interface ParsedScopeDataView {
+  title?: string;
+  clientName?: string;
+  workstreams: ParsedWorkstreamData[];
+  totalHours?: number;
+  totalBudget?: number;
+  startDate?: string;
+  endDate?: string;
+  paymentTerms?: string;
+  outOfScope?: string[];
+  assumptions?: string[];
+}
+
 interface ScopeDocumentData {
   id: string;
   fileName: string;
@@ -95,6 +117,7 @@ interface ScopeDocumentData {
   fileSizeBytes: number | null;
   status: string;
   errorMessage: string | null;
+  parsedData: ParsedScopeDataView | null;
   createdAt: string;
 }
 
@@ -656,8 +679,10 @@ function ScopeDocumentsCard({
 
   const statusBadge: Record<string, { variant: any; label: string }> = {
     UPLOADED: { variant: "secondary", label: "Uploaded" },
-    PARSING: { variant: "info", label: "Parsing..." },
-    PARSED: { variant: "success", label: "Parsed" },
+    PARSING: { variant: "outline", label: "Parsing..." },
+    PARSED: { variant: "outline", label: "Parsed" },
+    PROCESSING: { variant: "outline", label: "Extracting scope..." },
+    PROCESSED: { variant: "success", label: "Scope extracted" },
     FAILED: { variant: "destructive", label: "Failed" },
   };
 
@@ -721,57 +746,140 @@ function ScopeDocumentsCard({
             </p>
           </div>
         ) : (
-          <div className="space-y-2">
+          <div className="space-y-3">
             {documents.map((doc) => {
               const badge = statusBadge[doc.status] || statusBadge.UPLOADED;
+              const scope = doc.parsedData;
+              const isProcessing = doc.status === "PROCESSING";
+
               return (
                 <div
                   key={doc.id}
-                  className="flex items-center justify-between rounded-lg border p-3 group"
+                  className="rounded-lg border group"
                 >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <FileText className="h-5 w-5 text-muted-foreground shrink-0" />
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium truncate">
-                        {doc.fileName}
-                      </p>
-                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <span>
-                          {FILE_TYPE_LABELS[doc.fileType] || doc.fileType}
-                        </span>
-                        {doc.fileSizeBytes && (
-                          <span>{formatFileSize(doc.fileSizeBytes)}</span>
-                        )}
-                        <span>
-                          {new Date(doc.createdAt).toLocaleDateString("en-US", {
-                            month: "short",
-                            day: "numeric",
-                          })}
-                        </span>
-                      </div>
-                      {doc.errorMessage && (
-                        <p className="text-xs text-red-600 mt-0.5">
-                          {doc.errorMessage}
+                  <div className="flex items-center justify-between p-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <FileText className="h-5 w-5 text-muted-foreground shrink-0" />
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate">
+                          {doc.fileName}
                         </p>
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <span>
+                            {FILE_TYPE_LABELS[doc.fileType] || doc.fileType}
+                          </span>
+                          {doc.fileSizeBytes && (
+                            <span>{formatFileSize(doc.fileSizeBytes)}</span>
+                          )}
+                          <span>
+                            {new Date(doc.createdAt).toLocaleDateString("en-US", {
+                              month: "short",
+                              day: "numeric",
+                            })}
+                          </span>
+                        </div>
+                        {doc.errorMessage && (
+                          <p className="text-xs text-red-600 mt-0.5">
+                            {doc.errorMessage}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {isProcessing && (
+                        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                       )}
+                      <Badge variant={badge.variant}>{badge.label}</Badge>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 w-7 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                        onClick={() => handleDelete(doc.id)}
+                        disabled={deleting === doc.id}
+                      >
+                        {deleting === doc.id ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-3 w-3 text-muted-foreground" />
+                        )}
+                      </Button>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <Badge variant={badge.variant}>{badge.label}</Badge>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="h-7 w-7 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
-                      onClick={() => handleDelete(doc.id)}
-                      disabled={deleting === doc.id}
-                    >
-                      {deleting === doc.id ? (
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                      ) : (
-                        <Trash2 className="h-3 w-3 text-muted-foreground" />
+
+                  {scope && doc.status === "PROCESSED" && (
+                    <div className="border-t px-3 py-3 space-y-3 bg-muted/30">
+                      {scope.workstreams.length > 0 && (
+                        <div>
+                          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">
+                            Workstreams
+                          </p>
+                          <div className="space-y-1">
+                            {scope.workstreams.map((ws, i) => (
+                              <div key={i} className="flex items-center justify-between text-sm">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <span className="font-medium truncate">{ws.name}</span>
+                                  {ws.rateTier && (
+                                    <span className="text-xs text-muted-foreground">
+                                      {RATE_TIER_LABELS[ws.rateTier] || ws.rateTier}
+                                    </span>
+                                  )}
+                                </div>
+                                <span className="text-xs text-muted-foreground shrink-0">
+                                  {ws.allocatedHours ? `${ws.allocatedHours}h` : ""}
+                                  {ws.allocatedHours && ws.hourlyRate ? " · " : ""}
+                                  {ws.hourlyRate ? `$${ws.hourlyRate}/hr` : ""}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
                       )}
-                    </Button>
-                  </div>
+
+                      <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-muted-foreground">
+                        {scope.totalHours != null && (
+                          <span>Total: <span className="font-medium text-foreground">{scope.totalHours}h</span></span>
+                        )}
+                        {scope.totalBudget != null && (
+                          <span>Budget: <span className="font-medium text-foreground">${scope.totalBudget.toLocaleString()}</span></span>
+                        )}
+                        {scope.startDate && (
+                          <span>Start: {new Date(scope.startDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span>
+                        )}
+                        {scope.endDate && (
+                          <span>End: {new Date(scope.endDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span>
+                        )}
+                      </div>
+
+                      {scope.outOfScope && scope.outOfScope.length > 0 && (
+                        <div>
+                          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+                            Out of Scope
+                          </p>
+                          <ul className="text-xs text-muted-foreground space-y-0.5">
+                            {scope.outOfScope.map((item, i) => (
+                              <li key={i} className="flex items-start gap-1.5">
+                                <XCircle className="h-3 w-3 mt-0.5 shrink-0 text-red-400" />
+                                {item}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {scope.assumptions && scope.assumptions.length > 0 && (
+                        <details className="text-xs">
+                          <summary className="text-muted-foreground cursor-pointer hover:text-foreground">
+                            {scope.assumptions.length} assumption{scope.assumptions.length !== 1 ? "s" : ""}
+                          </summary>
+                          <ul className="mt-1 text-muted-foreground space-y-0.5 pl-1">
+                            {scope.assumptions.map((item, i) => (
+                              <li key={i}>• {item}</li>
+                            ))}
+                          </ul>
+                        </details>
+                      )}
+                    </div>
+                  )}
                 </div>
               );
             })}

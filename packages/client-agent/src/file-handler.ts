@@ -89,39 +89,24 @@ export function registerFileHandler(app: App) {
 
       await client.chat.postMessage({
         channel: channel_id,
-        blocks: [
-          {
-            type: "section",
-            text: {
-              type: "mrkdwn",
-              text: `✅ *${file.name}* processed successfully\n• ${wordCount.toLocaleString()} words extracted\n• ${charCount.toLocaleString()} characters\n• Linked to engagement *${mapping.engagementName}*`,
-            },
-          },
-          {
-            type: "context",
-            elements: [
-              {
-                type: "mrkdwn",
-                text: `Document ID: \`${doc.id}\` | Type: ${mimeType}`,
-              },
-            ],
-          },
-        ],
-        text: `Processed ${file.name}: ${wordCount} words extracted.`,
+        text: `📄 *${file.name}* parsed (${wordCount.toLocaleString()} words) — extracting scope now...`,
       });
 
       log({
         level: "info",
         service: SERVICE,
-        message: "Scope document ingested",
+        message: "Scope document ingested, triggering AI processing",
         engagementId: mapping.engagementId,
-        meta: {
-          documentId: doc.id,
-          fileName: file.name,
-          wordCount,
-          charCount,
-        },
+        meta: { documentId: doc.id, fileName: file.name, wordCount, charCount },
       });
+
+      triggerScopeProcessing(
+        mapping.engagementId,
+        doc.id,
+        file.name,
+        channel_id,
+        client
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log({ level: "error", service: SERVICE, message: "File processing failed", meta: { file_id, error: message } });
@@ -163,6 +148,80 @@ async function downloadAndParse(
   const buffer = Buffer.from(arrayBuffer);
 
   return extractText(buffer, file.mimetype, file.name);
+}
+
+async function triggerScopeProcessing(
+  engagementId: string,
+  documentId: string,
+  fileName: string,
+  channelId: string,
+  client: any
+) {
+  const webUrl = process.env.REX_WEB_URL || "https://rex-web.up.railway.app";
+  const apiSecret = process.env.REX_INTERNAL_API_SECRET;
+
+  try {
+    const res = await fetch(
+      `${webUrl}/api/engagements/${engagementId}/scope-documents/${documentId}/process`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(apiSecret ? { "x-api-secret": apiSecret } : {}),
+        },
+      }
+    );
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`${res.status}: ${body}`);
+    }
+
+    const result = await res.json();
+    const workstreamCount = result.parsedData?.workstreams?.length || 0;
+    const parts: string[] = [
+      `✅ *${fileName}* — scope extracted successfully`,
+    ];
+
+    if (workstreamCount > 0) {
+      parts.push(`• ${workstreamCount} workstream${workstreamCount !== 1 ? "s" : ""} identified`);
+      for (const ws of result.parsedData.workstreams) {
+        const hours = ws.allocatedHours ? ` (${ws.allocatedHours}h)` : "";
+        parts.push(`  → ${ws.name}${hours}`);
+      }
+    }
+
+    if (result.parsedData?.totalHours) {
+      parts.push(`• ${result.parsedData.totalHours}h total`);
+    }
+
+    if (result.parsedData?.outOfScope?.length) {
+      parts.push(`• ${result.parsedData.outOfScope.length} out-of-scope item${result.parsedData.outOfScope.length !== 1 ? "s" : ""} captured`);
+    }
+
+    if (result.sowCreated) {
+      parts.push(`\n📋 SOW auto-created with ${result.lineItemsCreated} workstream${result.lineItemsCreated !== 1 ? "s" : ""}`);
+    }
+
+    await client.chat.postMessage({
+      channel: channelId,
+      text: parts.join("\n"),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log({
+      level: "error",
+      service: SERVICE,
+      message: "Failed to trigger scope processing",
+      engagementId,
+      meta: { documentId, error: message },
+    });
+
+    await client.chat.postMessage({
+      channel: channelId,
+      text: `⚠️ Parsed *${fileName}* but scope extraction failed: ${message}\nThe raw text is saved — you can retry from the Rex dashboard.`,
+    }).catch(() => {});
+  }
 }
 
 interface EngagementMapping {
