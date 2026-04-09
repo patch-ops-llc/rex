@@ -3,6 +3,7 @@
   "private": true,
   "scripts": {
     "build": "prisma generate && turbo run build --filter=@rex/web && cp -r apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static",
+    "build:display": "prisma generate && turbo run build --filter=@rex/display && cp -r apps/display/.next/static apps/display/.next/standalone/apps/display/.next/static",
     "start": "node apps/web/.next/standalone/apps/web/server.js",
     "dev": "turbo run dev",
     "lint": "turbo run lint",

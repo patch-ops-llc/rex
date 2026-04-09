@@ -8,7 +8,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { event, data } = body;
 
-    console.log(`Recall webhook received: ${event}`);
+    console.log(`Recall webhook received: ${event}`, JSON.stringify(data).slice(0, 200));
 
     if (!event || !data) {
       return NextResponse.json({ received: true });
@@ -50,12 +50,16 @@ export async function POST(request: NextRequest) {
 
 async function handleStatusChange(data: any) {
   const { bot_id, status } = data;
+  console.log(`handleStatusChange: bot_id=${bot_id}, status=${JSON.stringify(status)}`);
   if (!bot_id) return;
 
   const call = await prisma.discoveryCall.findFirst({
     where: { recallBotId: bot_id },
   });
-  if (!call) return;
+  if (!call) {
+    console.log(`handleStatusChange: no call found for bot ${bot_id}`);
+    return;
+  }
 
   const statusMap: Record<string, string> = {
     joining_call: "WAITING",
