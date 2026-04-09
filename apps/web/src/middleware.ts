@@ -6,6 +6,8 @@ const isPublicRoute = createRouteMatcher([
   "/sign-up(.*)",
   "/walkthrough(.*)",
   "/api/walkthroughs/share(.*)",
+  "/api/webhooks(.*)",
+  "/api/slack(.*)",
 ]);
 
 const hasClerk = !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
