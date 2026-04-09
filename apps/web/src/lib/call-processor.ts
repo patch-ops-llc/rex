@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { prisma, getRedis } from "@rex/shared";
+import { prisma } from "@rex/shared";
 import type { Prisma } from "@prisma/client";
 import type { ExtractedInsight, CallProcessingResult } from "@rex/shared";
 
@@ -150,45 +150,6 @@ export async function processTranscriptChunk(
       },
     });
     savedInsights.push(saved);
-
-    const redis = getRedis();
-    if (redis) {
-      try {
-        await redis.publish(
-          `rex:call:${callId}:events`,
-          JSON.stringify({
-            type: "insight",
-            insight: {
-              id: saved.id,
-              type: saved.type,
-              content: saved.content,
-              speaker: saved.speaker,
-              timestamp: saved.timestamp,
-              confidence: saved.confidence,
-              metadata: saved.metadata,
-            },
-          })
-        );
-      } catch {
-        // Redis unavailable
-      }
-    }
-  }
-
-  const redisForStatus = getRedis();
-  if (redisForStatus) {
-    try {
-      await redisForStatus.publish(
-        `rex:call:${callId}:events`,
-        JSON.stringify({
-          type: "processing",
-          stage: "complete",
-          insightsCount: savedInsights.length,
-        })
-      );
-    } catch {
-      // Redis unavailable
-    }
   }
 
   return {

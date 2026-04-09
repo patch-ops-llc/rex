@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma, getRedis } from "@rex/shared";
+import { prisma } from "@rex/shared";
 import { processTranscriptChunk } from "@/lib/call-processor";
 import { finalizeCall } from "@/lib/call-finalizer";
 
@@ -21,21 +21,6 @@ export async function POST(
     }
 
     const isFinal = request.headers.get("x-final") === "true";
-
-    const redis = getRedis();
-    if (redis) {
-      try {
-        await redis.publish(
-          `rex:call:${call.id}:events`,
-          JSON.stringify({
-            type: "processing",
-            stage: isFinal ? "analyzing" : "started",
-          })
-        );
-      } catch {
-        // Redis unavailable
-      }
-    }
 
     const result = await processTranscriptChunk(params.callId, isFinal);
 

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma, getRedis } from "@rex/shared";
+import { prisma } from "@rex/shared";
 
 const PROCESS_INTERVAL_SECONDS = 30;
 
@@ -7,6 +7,8 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const { event, data } = body;
+
+    console.log(`Recall webhook received: ${event}`);
 
     if (!event || !data) {
       return NextResponse.json({ received: true });
@@ -87,18 +89,6 @@ async function handleStatusChange(data: any) {
     where: { id: call.id },
     data: updateData,
   });
-
-  const redis = getRedis();
-  if (redis) {
-    try {
-      await redis.publish(
-        `rex:call:${call.id}:events`,
-        JSON.stringify({ type: "status", status: newStatus, message: status?.message })
-      );
-    } catch {
-      // Redis unavailable — non-fatal
-    }
-  }
 }
 
 async function handleRealtimeTranscript(data: any, isFinal: boolean) {
@@ -119,7 +109,7 @@ async function handleRealtimeTranscript(data: any, isFinal: boolean) {
     entry.words[entry.words.length - 1]?.end_timestamp?.relative ?? startTime;
   const speaker = entry.participant?.name || "Unknown";
 
-  const segment = await prisma.transcriptSegment.create({
+  await prisma.transcriptSegment.create({
     data: {
       discoveryCallId: call.id,
       speaker,
@@ -130,28 +120,6 @@ async function handleRealtimeTranscript(data: any, isFinal: boolean) {
       isFinal,
     },
   });
-
-  const redis = getRedis();
-  if (redis) {
-    try {
-      await redis.publish(
-        `rex:call:${call.id}:events`,
-        JSON.stringify({
-          type: "transcript",
-          segment: {
-            id: segment.id,
-            speaker: segment.speaker,
-            text: segment.text,
-            startTime: segment.startTime,
-            endTime: segment.endTime,
-            isFinal: segment.isFinal,
-          },
-        })
-      );
-    } catch {
-      // Redis unavailable — non-fatal
-    }
-  }
 
   if (!isFinal) return;
 
@@ -199,7 +167,7 @@ async function handleTranscription(data: any) {
       entry.words.reduce((sum: number, w: any) => sum + (w.confidence || 1), 0) /
       entry.words.length;
 
-    const segment = await prisma.transcriptSegment.create({
+    await prisma.transcriptSegment.create({
       data: {
         discoveryCallId: call.id,
         speaker: entry.speaker || "Unknown",
@@ -210,31 +178,8 @@ async function handleTranscription(data: any) {
         isFinal: entry.is_final ?? true,
       },
     });
-
-    const redis = getRedis();
-    if (redis) {
-      try {
-        await redis.publish(
-          `rex:call:${call.id}:events`,
-          JSON.stringify({
-            type: "transcript",
-            segment: {
-              id: segment.id,
-              speaker: segment.speaker,
-              text: segment.text,
-              startTime: segment.startTime,
-              endTime: segment.endTime,
-              isFinal: segment.isFinal,
-            },
-          })
-        );
-      } catch {
-        // Redis unavailable — non-fatal
-      }
-    }
   }
 
-  // Trigger AI processing periodically
   const now = new Date();
   const lastProcessed = call.lastProcessedAt;
   const secondsSinceLastProcess = lastProcessed
@@ -279,7 +224,6 @@ async function handleCallDone(data: any) {
     },
   });
 
-  // Build full transcript from segments
   const segments = await prisma.transcriptSegment.findMany({
     where: { discoveryCallId: call.id },
     orderBy: { startTime: "asc" },
@@ -303,17 +247,5 @@ async function handleCallDone(data: any) {
       `${appUrl}/api/engagements/${call.engagementId}/discovery/${call.id}/process`,
       { method: "POST", headers: { "x-final": "true" } }
     ).catch((err) => console.error("Failed to trigger final processing:", err));
-  }
-
-  const redis = getRedis();
-  if (redis) {
-    try {
-      await redis.publish(
-        `rex:call:${call.id}:events`,
-        JSON.stringify({ type: "status", status: "COMPLETED", message: "Call ended" })
-      );
-    } catch {
-      // Redis unavailable
-    }
   }
 }

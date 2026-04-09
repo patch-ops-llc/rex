@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma, getRedis } from "@rex/shared";
+import { prisma } from "@rex/shared";
 import { removeBot } from "@/lib/recall";
 import { processTranscriptChunk } from "@/lib/call-processor";
 import { finalizeCall } from "@/lib/call-finalizer";
@@ -30,7 +30,6 @@ export async function POST(
       );
     }
 
-    // Pull the bot out of the call
     if (call.recallBotId) {
       try {
         await removeBot(call.recallBotId);
@@ -51,7 +50,6 @@ export async function POST(
       },
     });
 
-    // Build raw transcript from segments
     const rawTranscript = call.segments.map((s) => ({
       speaker: s.speaker,
       text: s.text,
@@ -66,20 +64,6 @@ export async function POST(
       });
     }
 
-    // Notify live dashboard
-    const redis = getRedis();
-    if (redis) {
-      try {
-        await redis.publish(
-          `rex:call:${call.id}:events`,
-          JSON.stringify({ type: "status", status: "COMPLETED", message: "Session ended manually" })
-        );
-      } catch {
-        // Redis unavailable
-      }
-    }
-
-    // Run final processing
     try {
       const result = await processTranscriptChunk(params.callId, true);
       if (result.summary) {
