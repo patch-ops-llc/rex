@@ -151,40 +151,44 @@ export async function processTranscriptChunk(
     });
     savedInsights.push(saved);
 
+    const redis = getRedis();
+    if (redis) {
+      try {
+        await redis.publish(
+          `rex:call:${callId}:events`,
+          JSON.stringify({
+            type: "insight",
+            insight: {
+              id: saved.id,
+              type: saved.type,
+              content: saved.content,
+              speaker: saved.speaker,
+              timestamp: saved.timestamp,
+              confidence: saved.confidence,
+              metadata: saved.metadata,
+            },
+          })
+        );
+      } catch {
+        // Redis unavailable
+      }
+    }
+  }
+
+  const redisForStatus = getRedis();
+  if (redisForStatus) {
     try {
-      const redis = getRedis();
-      await redis.publish(
+      await redisForStatus.publish(
         `rex:call:${callId}:events`,
         JSON.stringify({
-          type: "insight",
-          insight: {
-            id: saved.id,
-            type: saved.type,
-            content: saved.content,
-            speaker: saved.speaker,
-            timestamp: saved.timestamp,
-            confidence: saved.confidence,
-            metadata: saved.metadata,
-          },
+          type: "processing",
+          stage: "complete",
+          insightsCount: savedInsights.length,
         })
       );
     } catch {
       // Redis unavailable
     }
-  }
-
-  try {
-    const redis = getRedis();
-    await redis.publish(
-      `rex:call:${callId}:events`,
-      JSON.stringify({
-        type: "processing",
-        stage: "complete",
-        insightsCount: savedInsights.length,
-      })
-    );
-  } catch {
-    // Redis unavailable
   }
 
   return {

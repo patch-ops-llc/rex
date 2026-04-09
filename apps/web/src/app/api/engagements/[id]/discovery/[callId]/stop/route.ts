@@ -67,14 +67,16 @@ export async function POST(
     }
 
     // Notify live dashboard
-    try {
-      const redis = getRedis();
-      await redis.publish(
-        `rex:call:${call.id}:events`,
-        JSON.stringify({ type: "status", status: "COMPLETED", message: "Session ended manually" })
-      );
-    } catch {
-      // Redis unavailable
+    const redis = getRedis();
+    if (redis) {
+      try {
+        await redis.publish(
+          `rex:call:${call.id}:events`,
+          JSON.stringify({ type: "status", status: "COMPLETED", message: "Session ended manually" })
+        );
+      } catch {
+        // Redis unavailable
+      }
     }
 
     // Run final processing

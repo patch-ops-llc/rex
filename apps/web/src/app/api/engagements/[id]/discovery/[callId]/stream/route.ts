@@ -66,20 +66,23 @@ export async function GET(
         })),
       });
 
-      // Subscribe to Redis for real-time updates
+      // Subscribe to Redis for real-time updates (if available)
       try {
-        subscriber = createRedisSubscriber();
-        const channel = `rex:call:${params.callId}:events`;
+        const sub = createRedisSubscriber();
+        if (sub) {
+          subscriber = sub;
+          const channel = `rex:call:${params.callId}:events`;
 
-        subscriber.subscribe(channel);
-        subscriber.on("message", (_ch: string, message: string) => {
-          try {
-            const parsed = JSON.parse(message);
-            send(parsed.type || "message", parsed);
-          } catch {
-            send("message", { raw: message });
-          }
-        });
+          subscriber.subscribe(channel);
+          subscriber.on("message", (_ch: string, message: string) => {
+            try {
+              const parsed = JSON.parse(message);
+              send(parsed.type || "message", parsed);
+            } catch {
+              send("message", { raw: message });
+            }
+          });
+        }
       } catch {
         // Redis unavailable — fall back to polling via heartbeat
       }

@@ -88,14 +88,16 @@ async function handleStatusChange(data: any) {
     data: updateData,
   });
 
-  try {
-    const redis = getRedis();
-    await redis.publish(
-      `rex:call:${call.id}:events`,
-      JSON.stringify({ type: "status", status: newStatus, message: status?.message })
-    );
-  } catch {
-    // Redis unavailable — non-fatal
+  const redis = getRedis();
+  if (redis) {
+    try {
+      await redis.publish(
+        `rex:call:${call.id}:events`,
+        JSON.stringify({ type: "status", status: newStatus, message: status?.message })
+      );
+    } catch {
+      // Redis unavailable — non-fatal
+    }
   }
 }
 
@@ -129,24 +131,26 @@ async function handleRealtimeTranscript(data: any, isFinal: boolean) {
     },
   });
 
-  try {
-    const redis = getRedis();
-    await redis.publish(
-      `rex:call:${call.id}:events`,
-      JSON.stringify({
-        type: "transcript",
-        segment: {
-          id: segment.id,
-          speaker: segment.speaker,
-          text: segment.text,
-          startTime: segment.startTime,
-          endTime: segment.endTime,
-          isFinal: segment.isFinal,
-        },
-      })
-    );
-  } catch {
-    // Redis unavailable — non-fatal
+  const redis = getRedis();
+  if (redis) {
+    try {
+      await redis.publish(
+        `rex:call:${call.id}:events`,
+        JSON.stringify({
+          type: "transcript",
+          segment: {
+            id: segment.id,
+            speaker: segment.speaker,
+            text: segment.text,
+            startTime: segment.startTime,
+            endTime: segment.endTime,
+            isFinal: segment.isFinal,
+          },
+        })
+      );
+    } catch {
+      // Redis unavailable — non-fatal
+    }
   }
 
   if (!isFinal) return;
@@ -207,24 +211,26 @@ async function handleTranscription(data: any) {
       },
     });
 
-    try {
-      const redis = getRedis();
-      await redis.publish(
-        `rex:call:${call.id}:events`,
-        JSON.stringify({
-          type: "transcript",
-          segment: {
-            id: segment.id,
-            speaker: segment.speaker,
-            text: segment.text,
-            startTime: segment.startTime,
-            endTime: segment.endTime,
-            isFinal: segment.isFinal,
-          },
-        })
-      );
-    } catch {
-      // Redis unavailable — non-fatal
+    const redis = getRedis();
+    if (redis) {
+      try {
+        await redis.publish(
+          `rex:call:${call.id}:events`,
+          JSON.stringify({
+            type: "transcript",
+            segment: {
+              id: segment.id,
+              speaker: segment.speaker,
+              text: segment.text,
+              startTime: segment.startTime,
+              endTime: segment.endTime,
+              isFinal: segment.isFinal,
+            },
+          })
+        );
+      } catch {
+        // Redis unavailable — non-fatal
+      }
     }
   }
 
@@ -299,13 +305,15 @@ async function handleCallDone(data: any) {
     ).catch((err) => console.error("Failed to trigger final processing:", err));
   }
 
-  try {
-    const redis = getRedis();
-    await redis.publish(
-      `rex:call:${call.id}:events`,
-      JSON.stringify({ type: "status", status: "COMPLETED", message: "Call ended" })
-    );
-  } catch {
-    // Redis unavailable
+  const redis = getRedis();
+  if (redis) {
+    try {
+      await redis.publish(
+        `rex:call:${call.id}:events`,
+        JSON.stringify({ type: "status", status: "COMPLETED", message: "Call ended" })
+      );
+    } catch {
+      // Redis unavailable
+    }
   }
 }

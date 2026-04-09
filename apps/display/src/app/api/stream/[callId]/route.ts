@@ -74,18 +74,21 @@ export async function GET(
       });
 
       try {
-        subscriber = createRedisSubscriber();
-        const channel = `rex:call:${params.callId}:events`;
+        const sub = createRedisSubscriber();
+        if (sub) {
+          subscriber = sub;
+          const channel = `rex:call:${params.callId}:events`;
 
-        subscriber.subscribe(channel);
-        subscriber.on("message", (_ch: string, message: string) => {
-          try {
-            const parsed = JSON.parse(message);
-            send(parsed.type || "message", parsed);
-          } catch {
-            send("message", { raw: message });
-          }
-        });
+          subscriber.subscribe(channel);
+          subscriber.on("message", (_ch: string, message: string) => {
+            try {
+              const parsed = JSON.parse(message);
+              send(parsed.type || "message", parsed);
+            } catch {
+              send("message", { raw: message });
+            }
+          });
+        }
       } catch {
         // Redis unavailable — poll fallback via heartbeat
       }

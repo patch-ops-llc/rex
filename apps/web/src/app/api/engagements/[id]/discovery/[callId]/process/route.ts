@@ -22,17 +22,19 @@ export async function POST(
 
     const isFinal = request.headers.get("x-final") === "true";
 
-    try {
-      const redis = getRedis();
-      await redis.publish(
-        `rex:call:${call.id}:events`,
-        JSON.stringify({
-          type: "processing",
-          stage: isFinal ? "analyzing" : "started",
-        })
-      );
-    } catch {
-      // Redis unavailable
+    const redis = getRedis();
+    if (redis) {
+      try {
+        await redis.publish(
+          `rex:call:${call.id}:events`,
+          JSON.stringify({
+            type: "processing",
+            stage: isFinal ? "analyzing" : "started",
+          })
+        );
+      } catch {
+        // Redis unavailable
+      }
     }
 
     const result = await processTranscriptChunk(params.callId, isFinal);
