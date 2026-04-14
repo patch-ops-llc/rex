@@ -20,6 +20,7 @@ model Engagement {
   industry        String?
   hubspotTier     String?
   status          EngagementStatus @default(CREATED)
+  shareToken      String?          @unique
   embedding       Unsupported("vector(1536)")?
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt

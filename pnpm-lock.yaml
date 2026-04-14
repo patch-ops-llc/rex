@@ -158,6 +158,9 @@ importers:
       '@rex/enablement':
         specifier: workspace:*
         version: link:../../packages/enablement
+      '@rex/hubspot-engine':
+        specifier: workspace:*
+        version: link:../../packages/hubspot-engine
       '@rex/shared':
         specifier: workspace:*
         version: link:../../packages/shared

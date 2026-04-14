@@ -17,7 +17,8 @@
     "paths": {
       "@rex/shared": ["packages/shared/src"],
       "@rex/orchestrator": ["packages/orchestrator/src"],
-      "@rex/enablement": ["packages/enablement/src"]
+      "@rex/enablement": ["packages/enablement/src"],
+      "@rex/hubspot-engine": ["packages/hubspot-engine/src"]
     }
   },
   "exclude": ["node_modules", "dist"]

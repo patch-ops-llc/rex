@@ -1,3 +1,7 @@
-// @rex/hubspot-engine — Phase 3: HubSpot Implementation Engine
-// Executes approved build plans against live HubSpot portals via API.
-export {};
+export { executeBuildPlan } from "./executor";
+export { verifyPortalAccess, hubspotRequest } from "./client";
+export type {
+  ExecutionContext,
+  ExecutionSummary,
+  StepResult,
+} from "./types";

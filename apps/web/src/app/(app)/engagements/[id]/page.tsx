@@ -322,6 +322,7 @@ export default async function EngagementDetailPage({
               0
             )}
             requirementCount={engagement._count?.requirementItems || 0}
+            hasActivePortal={engagement.hubspotPortals?.some((p: any) => p.isActive) ?? false}
           />
         </TabsContent>
 

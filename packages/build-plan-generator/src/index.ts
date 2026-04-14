@@ -63,13 +63,22 @@ export async function generateBuildPlan({ engagementId }: GenerateOptions): Prom
     context += `\n\n## ${call.title || "Discovery Call"} (${call.insights.length} insights)`;
     if (call.summary) context += `\nSummary: ${call.summary}`;
     if (call.structuredData) {
-      const sd = call.structuredData as Record<string, any[]>;
-      for (const [type, items] of Object.entries(sd)) {
-        if (Array.isArray(items) && items.length > 0) {
-          context += `\n\n### ${type.toUpperCase()} (${items.length})`;
-          for (const item of items) {
-            context += `\n- ${item.content}`;
-            if (item.speaker) context += ` (${item.speaker})`;
+      const sd = call.structuredData as Record<string, any>;
+      for (const [type, value] of Object.entries(sd)) {
+        if (type === "entryType" || type === "fileName" || type === "segmentCount") continue;
+
+        if (typeof value === "string" && value.trim()) {
+          context += `\n\n### ${type.toUpperCase()}`;
+          context += `\n${value}`;
+        } else if (Array.isArray(value) && value.length > 0) {
+          context += `\n\n### ${type.toUpperCase()} (${value.length})`;
+          for (const item of value) {
+            if (typeof item === "string") {
+              context += `\n- ${item}`;
+            } else if (item.content) {
+              context += `\n- ${item.content}`;
+              if (item.speaker) context += ` (${item.speaker})`;
+            }
           }
         }
       }

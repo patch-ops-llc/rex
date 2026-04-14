@@ -2,6 +2,7 @@ import { log, EventType } from "@rex/shared";
 import { startSubscriber, registerHandler } from "./subscriber";
 import { handleDiscoverySubmitted } from "./handlers/discovery-submitted";
 import { handleWalkthroughRequested } from "./handlers/walkthrough-requested";
+import { handleBuildPlanApproved } from "./handlers/build-plan-approved";
 
 async function main() {
   log({
@@ -18,6 +19,11 @@ async function main() {
   registerHandler(
     EventType.WALKTHROUGH_REQUESTED,
     handleWalkthroughRequested
+  );
+
+  registerHandler(
+    EventType.BUILD_PLAN_APPROVED,
+    handleBuildPlanApproved
   );
 
   await startSubscriber();

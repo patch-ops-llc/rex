@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Trash2, CheckCircle2, Sparkles } from "lucide-react";
+import { Trash2, CheckCircle2, Sparkles, Upload, Loader2 } from "lucide-react";
 import { StatusBadge } from "@/components/status-badge";
 import { SendBotDialog } from "@/components/discovery/send-bot-dialog";
 import { AddDiscoveryDialog } from "@/components/add-discovery-dialog";
@@ -53,9 +53,12 @@ export function DiscoveryTab({
   hasBuildPlan,
 }: DiscoveryTabProps) {
   const router = useRouter();
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [calls, setCalls] = useState(initialCalls);
   const [deleteTarget, setDeleteTarget] = useState<DiscoveryCall | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
   async function handleDelete() {
     if (!deleteTarget) return;
@@ -63,7 +66,7 @@ export function DiscoveryTab({
     try {
       const res = await fetch(
         `/api/engagements/${engagementId}/discovery/${deleteTarget.id}`,
-        { method: "DELETE" }
+        { method: "DELETE" },
       );
       if (res.ok) {
         setCalls((prev) => prev.filter((c) => c.id !== deleteTarget.id));
@@ -72,6 +75,29 @@ export function DiscoveryTab({
     } finally {
       setDeleting(false);
       setDeleteTarget(null);
+    }
+  }
+
+  async function handleTranscriptUpload(file: File) {
+    setUploading(true);
+    setUploadError(null);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch(
+        `/api/engagements/${engagementId}/discovery/upload`,
+        { method: "POST", body: formData },
+      );
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Upload failed");
+      }
+      router.refresh();
+    } catch (err: any) {
+      setUploadError(err.message);
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
     }
   }
 
@@ -86,6 +112,34 @@ export function DiscoveryTab({
             </CardDescription>
           </div>
           <div className="flex items-center gap-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".txt,.md,.vtt,.srt,.csv"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleTranscriptUpload(file);
+              }}
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+            >
+              {uploading ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                  Uploading...
+                </>
+              ) : (
+                <>
+                  <Upload className="h-3.5 w-3.5 mr-1.5" />
+                  Upload Transcript
+                </>
+              )}
+            </Button>
             <SendBotDialog
               engagementId={engagementId}
               clientName={clientName}
@@ -94,11 +148,25 @@ export function DiscoveryTab({
           </div>
         </CardHeader>
         <CardContent>
+          {uploadError && (
+            <div className="mb-4 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+              {uploadError}
+            </div>
+          )}
+
           {(() => {
             const completedCalls = calls.filter((c) => c.status === "COMPLETED");
-            const activeCalls = calls.filter((c) => c.status === "IN_PROGRESS" || c.status === "WAITING");
-            const allDone = calls.length > 0 && activeCalls.length === 0 && completedCalls.length > 0;
-            const totalInsights = completedCalls.reduce((sum, c) => sum + c._count.insights, 0);
+            const activeCalls = calls.filter(
+              (c) => c.status === "IN_PROGRESS" || c.status === "WAITING",
+            );
+            const allDone =
+              calls.length > 0 &&
+              activeCalls.length === 0 &&
+              completedCalls.length > 0;
+            const totalInsights = completedCalls.reduce(
+              (sum, c) => sum + c._count.insights,
+              0,
+            );
 
             if (allDone && !hasBuildPlan) {
               return (
@@ -110,7 +178,10 @@ export function DiscoveryTab({
                         Discovery complete
                       </p>
                       <p className="text-xs text-emerald-700 dark:text-emerald-300">
-                        {completedCalls.length} call{completedCalls.length !== 1 ? "s" : ""} with {totalInsights} insight{totalInsights !== 1 ? "s" : ""} captured
+                        {completedCalls.length} call
+                        {completedCalls.length !== 1 ? "s" : ""} with{" "}
+                        {totalInsights} insight
+                        {totalInsights !== 1 ? "s" : ""} captured
                       </p>
                     </div>
                   </div>
@@ -119,7 +190,9 @@ export function DiscoveryTab({
                     variant="outline"
                     className="border-emerald-300 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-700 dark:text-emerald-300 dark:hover:bg-emerald-900"
                     onClick={() => {
-                      const trigger = document.querySelector('[value="build-plan"]') as HTMLElement;
+                      const trigger = document.querySelector(
+                        '[value="build-plan"]',
+                      ) as HTMLElement;
                       trigger?.click();
                     }}
                   >
@@ -134,14 +207,15 @@ export function DiscoveryTab({
 
           {calls.length === 0 ? (
             <p className="text-sm text-muted-foreground py-8 text-center">
-              No discovery calls yet. Send Rex to a meeting or add notes
-              manually.
+              No discovery calls yet. Upload a transcript, send Rex to a meeting,
+              or add notes manually.
             </p>
           ) : (
             <div className="space-y-4">
               {calls.map((call) => {
                 const data = call.structuredData as any;
                 const isBotCall = !!call.recallBotId;
+                const isTranscript = data?.entryType === "transcript_upload";
                 const isLive =
                   call.status === "IN_PROGRESS" || call.status === "WAITING";
 
@@ -160,10 +234,15 @@ export function DiscoveryTab({
                         )}
                         <span className="text-sm font-medium">
                           {call.title ||
-                            call.summary ||
+                            call.summary?.slice(0, 80) ||
                             call.meetingUrl ||
                             "Discovery Entry"}
                         </span>
+                        {isTranscript && (
+                          <span className="rounded bg-blue-100 dark:bg-blue-900 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:text-blue-300">
+                            Transcript
+                          </span>
+                        )}
                         {isBotCall && call.platform && (
                           <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
                             {call.platform === "google_meet"
@@ -175,22 +254,25 @@ export function DiscoveryTab({
                                   : call.platform}
                           </span>
                         )}
+                        {!isBotCall && !isTranscript && (
+                          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                            Manual
+                          </span>
+                        )}
                       </div>
                       <div className="flex items-center gap-2">
-                        {isBotCall && (
+                        {(isBotCall || isTranscript) && (
                           <span className="text-xs text-muted-foreground">
-                            {call._count.insights} insights
+                            {call._count.segments > 0 && `${call._count.segments} segments`}
+                            {call._count.segments > 0 && call._count.insights > 0 && " · "}
+                            {call._count.insights > 0 && `${call._count.insights} insights`}
                           </span>
                         )}
                         {data?.meetingDate && (
                           <span className="text-xs text-muted-foreground">
                             {new Date(data.meetingDate).toLocaleDateString(
                               "en-US",
-                              {
-                                month: "short",
-                                day: "numeric",
-                                year: "numeric",
-                              }
+                              { month: "short", day: "numeric", year: "numeric" },
                             )}
                           </span>
                         )}
@@ -213,9 +295,7 @@ export function DiscoveryTab({
                           href={`/engagements/${engagementId}/discovery/${call.id}/live`}
                           className="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"
                         >
-                          {isLive
-                            ? "Open Live Dashboard"
-                            : "View Call Summary"}
+                          {isLive ? "Open Live Dashboard" : "View Call Summary"}
                         </Link>
                       )}
 
@@ -225,12 +305,12 @@ export function DiscoveryTab({
                       </p>
                     )}
                     {data?.notes && (
-                      <div className="rounded bg-muted p-3 text-sm whitespace-pre-wrap">
+                      <div className="rounded bg-muted p-3 text-sm whitespace-pre-wrap max-h-40 overflow-auto">
                         {data.notes}
                       </div>
                     )}
                     {!data?.notes && call.summary && (
-                      <p className="text-sm text-muted-foreground">
+                      <p className="text-sm text-muted-foreground line-clamp-3">
                         {call.summary}
                       </p>
                     )}
