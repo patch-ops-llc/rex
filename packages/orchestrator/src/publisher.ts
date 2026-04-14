@@ -17,7 +17,9 @@ export async function publishEvent(
   };
 
   const message = JSON.stringify(event);
-  await redis.publish(REX_EVENTS_CHANNEL, message);
+  if (redis) {
+    await redis.publish(REX_EVENTS_CHANNEL, message);
+  }
 
   log({
     level: "info",

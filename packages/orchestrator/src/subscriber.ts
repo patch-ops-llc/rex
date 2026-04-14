@@ -29,6 +29,10 @@ export function registerHandler(
 
 export async function startSubscriber(): Promise<void> {
   const subscriber = createRedisSubscriber();
+  if (!subscriber) {
+    log({ level: "error", message: "Redis unavailable — subscriber not started", service: "orchestrator" });
+    return;
+  }
 
   subscriber.subscribe(REX_EVENTS_CHANNEL, (err) => {
     if (err) {

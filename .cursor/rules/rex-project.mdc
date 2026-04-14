@@ -1,0 +1,84 @@
+---
+description: Rex platform — architecture, packages, patterns, and conventions. Use this to answer any question about the project.
+alwaysApply: true
+---
+
+# Rex — PatchOps AI RevOps Platform
+
+Rex automates the RevOps consulting lifecycle: Discovery → Build Planning → HubSpot Implementation → QA → Enablement → Ongoing Client Support. Built by PatchOps (Zach West, Austin TX).
+
+## Monorepo Layout
+
+Turborepo + pnpm workspaces. Root scripts run Prisma generate before building.
+
+```
+rex/
+├── apps/
+│   ├── web/          # @rex/web — Next.js 14 App Router. Internal dashboard, API routes, Clerk auth, Slack OAuth, HubSpot portal management, discovery call processing, chat, SOW/pipeline, custom projects (GitHub+Railway). Deployed to Railway as standalone output.
+│   ├── display/      # @rex/display — Next.js. Live call copilot UI rendered inside Recall.ai screen share (1280x720). SSE from /api/stream/[callId] backed by Redis pub/sub per call channel.
+│   └── companion/    # @rex/companion — Next.js stub. Phase 5+ live monitoring/override for PatchOps team during calls.
+├── packages/
+│   ├── shared/       # @rex/shared — Prisma client singleton, Redis (ioredis), encrypt/decrypt (aes-256-gcm), pipeline phase/task lifecycle, domain event types, structured JSON logger. Every other package imports from here.
+│   ├── orchestrator/ # @rex/orchestrator — Redis subscriber on `rex:events` channel. Handler registry with dead-letter support. Handlers: discovery-submitted, walkthrough-requested. Publisher for same channel.
+│   ├── enablement/   # @rex/enablement — Walkthrough compiler. Claude narration from build plan + implementations. Playwright for screenshot capture (separate entry point to avoid bundling).
+│   ├── client-agent/ # @rex/client-agent — Slack Bolt app (socket mode). Scope document ingestion (file_shared), engagement resolution via channel/team mapping, PDF/DOCX parsing.
+│   ├── brain/        # @rex/brain — Placeholder. Will be real-time call processing engine (session state, transcript→LLM→actions, speaker diarization, TTS).
+│   ├── hubspot-engine/ # @rex/hubspot-engine — Placeholder. Will execute build plans against HubSpot portals via API.
+│   └── build-plan-generator/ # @rex/build-plan-generator — Placeholder. Will generate implementation plans from discovery output via Claude.
+├── prisma/
+│   └── schema.prisma  # Single source of truth. PostgreSQL + pgvector.
+├── railway.toml       # Builds web only (standalone Next.js). Other services need separate Railway services.
+└── turbo.json         # build, dev, lint pipelines
+```
+
+## Tech Stack
+
+- **Runtime:** Node 20+, TypeScript 5
+- **Web framework:** Next.js 14 (App Router), React 18, Tailwind, shadcn/ui, Radix, Lucide
+- **Database:** PostgreSQL 15 via Prisma 6, pgvector for embeddings (1536-dim)
+- **Cache/messaging:** Redis (ioredis) — pub/sub per-call channels + global `rex:events`
+- **Auth:** Clerk (`@clerk/nextjs`)
+- **AI:** Anthropic Claude (call processing, chat, enablement narration)
+- **Meetings:** Recall.ai (bot joins calls, captures audio, renders Display as screen share)
+- **Integrations:** Slack (multi-workspace OAuth + Bolt), GitHub (Octokit), Railway API, HubSpot API
+- **Hosting:** Railway (all services)
+
+## Key Database Models
+
+Core chain: `Engagement` → `DiscoveryCall` → `BuildPlan` → `Implementation` → `QAItem` → `EnablementSession`
+
+Support: `ClientSlackMapping`, `ClientConversation`, `WorkRequest` (with risk-assessed approval flow)
+
+Project mgmt: `ProjectPhase`, `ProjectTask`, `RequirementItem`, `UATItem`, `DeliveryLogEntry`
+
+Commercial: `SOW`, `SOWLineItem`, `ScopeAlert`, `ScopeDocument`
+
+Multi-tenant: `SlackWorkspace`, `HubSpotPortal` (OAuth tokens encrypted at rest)
+
+RAG: `CorpusEntry` with pgvector embeddings
+
+## Data Flow Patterns
+
+**Discovery (real-time):** Recall.ai → webhook → `apps/web/api/webhooks/recall` → updates `DiscoveryCall` + publishes to `rex:call:{callId}:events` Redis channel → `display` SSE stream picks it up for live UI.
+
+**Async orchestration:** Any service publishes typed events to `rex:events` Redis channel → `orchestrator` subscriber dispatches to registered handlers.
+
+**Walkthroughs:** Web POST → `@rex/enablement` `compileWalkthrough()` → Claude narration → Prisma `Walkthrough` + steps.
+
+**Client agent:** Slack message → Bolt handler → resolve engagement via `ClientSlackMapping` → intent classify → route to handler → response.
+
+## Conventions
+
+- JavaScript/Node.js for all packages
+- `@rex/shared` is the import hub for Prisma, Redis, crypto, types, logging
+- Structured JSON logging via shared `log()` function
+- Error handling with meaningful messages; always handle rate limits and retries
+- Environment variables for all secrets (never hardcode)
+- Redis pub/sub channel naming: `rex:call:{id}:events` (per-call), `rex:events` (global)
+- Event types defined in `@rex/shared` as a canonical enum (`EventType`)
+- Prisma `Unsupported("vector(1536)")` for pgvector columns
+- Next.js standalone output for Railway deployment
+
+## Build Phase Status
+
+Phases 1-2 are substantially built (web dashboard, engagements, discovery, pipeline, SOW, custom projects, enablement walkthroughs, display SSE). Phase 4 client-agent has Slack scope ingestion working. Phases 3, 5-10 are scaffolded or planned only (brain, hubspot-engine, build-plan-generator are stubs).
