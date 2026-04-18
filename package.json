@@ -1,5 +1,6 @@
 {
   "name": "rex",
+  "version": "0.1.0",
   "private": true,
   "scripts": {
     "build": "prisma generate && turbo run build --filter=@rex/web --filter=@rex/display && cp -r apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static && cp -r apps/display/.next/static apps/display/.next/standalone/apps/display/.next/static",
