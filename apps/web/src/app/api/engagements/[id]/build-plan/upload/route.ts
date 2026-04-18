@@ -13,7 +13,6 @@ export async function POST(
         id: true,
         name: true,
         clientName: true,
-        buildPlan: { select: { id: true, version: true } },
       },
     });
 
@@ -61,27 +60,21 @@ export async function POST(
     planData.humanRequiredItems ??= [];
     planData.qaChecklist ??= [];
 
-    let buildPlan;
-    if (engagement.buildPlan) {
-      buildPlan = await prisma.buildPlan.update({
-        where: { engagementId: params.id },
-        data: {
-          planData: planData as any,
-          version: { increment: 1 },
-          status: "DRAFT",
-          approvedBy: null,
-          approvedAt: null,
-        },
-      });
-    } else {
-      buildPlan = await prisma.buildPlan.create({
-        data: {
-          engagementId: params.id,
-          planData: planData as any,
-          status: "DRAFT",
-        },
-      });
-    }
+    const buildPlan = await prisma.buildPlan.upsert({
+      where: { engagementId: params.id },
+      update: {
+        planData: planData as any,
+        version: { increment: 1 },
+        status: "DRAFT",
+        approvedBy: null,
+        approvedAt: null,
+      },
+      create: {
+        engagementId: params.id,
+        planData: planData as any,
+        status: "DRAFT",
+      },
+    });
 
     await prisma.deliveryLogEntry.create({
       data: {

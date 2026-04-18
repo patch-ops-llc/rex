@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Loader2,
@@ -46,10 +46,66 @@ interface BuildPlanTabProps {
     createdAt: string;
     updatedAt: string;
   } | null;
+  buildPlanJob: {
+    id: string;
+    status: string;
+    outputData: any;
+    errorMessage: string | null;
+    updatedAt: string;
+    startedAt: string | null;
+    completedAt: string | null;
+  } | null;
   completedCallCount: number;
   totalInsightCount: number;
   requirementCount: number;
   hasActivePortal: boolean;
+}
+
+interface BuildPlanJobState {
+  id: string;
+  status: string;
+  progressPct: number;
+  ticker: string;
+  stage: string;
+  errorMessage: string | null;
+  updatedAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  isStale?: boolean;
+}
+
+function toJobState(raw: BuildPlanTabProps["buildPlanJob"] | null): BuildPlanJobState | null {
+  if (!raw) return null;
+  const output =
+    raw.outputData && typeof raw.outputData === "object"
+      ? (raw.outputData as {
+          progressPct?: number;
+          ticker?: string;
+          stage?: string;
+        })
+      : {};
+  return {
+    id: raw.id,
+    status: raw.status,
+    progressPct:
+      typeof output.progressPct === "number"
+        ? Math.max(0, Math.min(100, Math.round(output.progressPct)))
+        : 0,
+    ticker:
+      typeof output.ticker === "string" && output.ticker.trim().length > 0
+        ? output.ticker
+        : raw.status === "PENDING"
+          ? "Queued for generation"
+          : "Generating build plan",
+    stage:
+      typeof output.stage === "string" && output.stage.trim().length > 0
+        ? output.stage
+        : "running",
+    errorMessage: raw.errorMessage,
+    updatedAt: raw.updatedAt,
+    startedAt: raw.startedAt,
+    completedAt: raw.completedAt,
+  };
 }
 
 function PlanSummary({ planData }: { planData: any }) {
@@ -145,6 +201,7 @@ function PlanSummary({ planData }: { planData: any }) {
 export function BuildPlanTab({
   engagementId,
   buildPlan,
+  buildPlanJob,
   completedCallCount,
   totalInsightCount,
   requirementCount,
@@ -152,7 +209,7 @@ export function BuildPlanTab({
 }: BuildPlanTabProps) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [generating, setGenerating] = useState(false);
+  const [job, setJob] = useState<BuildPlanJobState | null>(() => toJobState(buildPlanJob));
   const [uploading, setUploading] = useState(false);
   const [approving, setApproving] = useState(false);
   const [implementing, setImplementing] = useState(false);
@@ -164,10 +221,45 @@ export function BuildPlanTab({
   const [confirmImplement, setConfirmImplement] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
 
+  useEffect(() => {
+    setJob(toJobState(buildPlanJob));
+  }, [buildPlanJob]);
+
+  const generating = job ? ["PENDING", "IN_PROGRESS"].includes(job.status) : false;
   const busy = generating || uploading || approving || implementing;
 
+  useEffect(() => {
+    if (!job || !["PENDING", "IN_PROGRESS"].includes(job.status)) return;
+
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/engagements/${engagementId}/build-plan/job`, {
+          cache: "no-store",
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const next = data.job as BuildPlanJobState | null;
+        if (!next) return;
+
+        setJob(next);
+
+        if (next.status === "COMPLETED") {
+          setSuccess("Build plan generated successfully.");
+          router.refresh();
+        } else if (next.status === "FAILED") {
+          setError(next.errorMessage || "Build plan generation failed.");
+        }
+      } catch {
+        // silent retry on next interval
+      }
+    };
+
+    void poll();
+    const interval = setInterval(poll, 2500);
+    return () => clearInterval(interval);
+  }, [engagementId, job?.id, job?.status, router]);
+
   async function handleGenerate() {
-    setGenerating(true);
     setError(null);
     setSuccess(null);
     try {
@@ -176,13 +268,14 @@ export function BuildPlanTab({
         const data = await res.json();
         throw new Error(data.error || "Generation failed");
       }
-      router.refresh();
+      const data = await res.json();
+      if (data.job) {
+        setJob(data.job as BuildPlanJobState);
+      }
     } catch (err: any) {
       setError(err.message);
-    } finally {
-      setGenerating(false);
-      setConfirmRegenerate(false);
     }
+    setConfirmRegenerate(false);
   }
 
   async function handleUpload(file: File) {
@@ -374,18 +467,51 @@ export function BuildPlanTab({
 
           {(generating || uploading) && (
             <div className="flex flex-col items-center justify-center py-12 gap-3">
-              <Loader2 className="h-8 w-8 animate-spin text-primary" />
-              <div className="text-center">
-                <p className="text-sm font-medium">
-                  {generating ? "Generating build plan..." : "Uploading build plan..."}
+              {generating ? (
+                <div className="w-full max-w-xl space-y-3">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="font-medium">Generating build plan...</span>
+                    <span className="text-muted-foreground">{job?.progressPct ?? 0}%</span>
+                  </div>
+                  <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                    <div
+                      className="h-full bg-primary transition-all duration-500 ease-out"
+                      style={{ width: `${job?.progressPct ?? 0}%` }}
+                    />
+                  </div>
+                  <div className="flex items-start gap-2 rounded-lg border bg-muted/40 p-3 text-sm">
+                    <Loader2 className="h-4 w-4 mt-0.5 shrink-0 animate-spin text-primary" />
+                    <div>
+                      <p className="font-medium">{job?.ticker || "Generating build plan"}</p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Analyzing {completedCallCount} discovery call{completedCallCount !== 1 ? "s" : ""},
+                        {" "}{totalInsightCount} insight{totalInsightCount !== 1 ? "s" : ""},
+                        and {requirementCount} requirement{requirementCount !== 1 ? "s" : ""}.
+                        Progress is persisted, so you can safely navigate away and come back.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-center">
+                  <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto" />
+                  <p className="text-sm font-medium mt-3">Uploading build plan...</p>
+                </div>
+              )}
+              {job?.isStale && (
+                <p className="text-xs text-amber-600 text-center">
+                  Job heartbeat looks stale. Retrying in the background.
                 </p>
-                {generating && (
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Analyzing {completedCallCount} discovery call{completedCallCount !== 1 ? "s" : ""},
-                    {" "}{totalInsightCount} insight{totalInsightCount !== 1 ? "s" : ""},
-                    and {requirementCount} requirement{requirementCount !== 1 ? "s" : ""}
-                  </p>
-                )}
+              )}
+            </div>
+          )}
+
+          {!busy && job?.status === "FAILED" && (
+            <div className="mb-4 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive flex items-start gap-2">
+              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-medium">Build plan generation failed</p>
+                <p className="text-xs mt-1">{job.errorMessage || "Please try again."}</p>
               </div>
             </div>
           )}

@@ -28,6 +28,7 @@ export default async function EngagementDetailPage({
   let walkthroughs: any[] = [];
   let scopeDocuments: any[] = [];
   let contacts: any[] = [];
+  let buildPlanJob: any = null;
 
   try {
     engagement = await prisma.engagement.findUnique({
@@ -96,6 +97,14 @@ export default async function EngagementDetailPage({
       contacts = await prisma.engagementContact.findMany({
         where: { engagementId: params.id },
         orderBy: { createdAt: "desc" },
+      });
+
+      buildPlanJob = await prisma.projectTask.findFirst({
+        where: {
+          engagementId: params.id,
+          sourceType: "BuildPlanGenerationJob",
+        },
+        orderBy: { updatedAt: "desc" },
       });
     }
 
@@ -309,6 +318,19 @@ export default async function EngagementDetailPage({
                     planData: engagement.buildPlan.planData,
                     createdAt: engagement.buildPlan.createdAt.toISOString(),
                     updatedAt: engagement.buildPlan.updatedAt.toISOString(),
+                  }
+                : null
+            }
+            buildPlanJob={
+              buildPlanJob
+                ? {
+                    id: buildPlanJob.id,
+                    status: buildPlanJob.status,
+                    outputData: buildPlanJob.outputData,
+                    errorMessage: buildPlanJob.errorMessage,
+                    updatedAt: buildPlanJob.updatedAt.toISOString(),
+                    startedAt: buildPlanJob.startedAt?.toISOString() ?? null,
+                    completedAt: buildPlanJob.completedAt?.toISOString() ?? null,
                   }
                 : null
             }
