@@ -11,10 +11,13 @@ export async function GET(request: NextRequest) {
     if (clickupTaskId) where.clickupTaskId = clickupTaskId;
     if (connectionId) where.connectionId = connectionId;
 
+    const limitParam = parseInt(searchParams.get("limit") || "50", 10);
+    const take = Math.min(Math.max(limitParam, 1), 200);
+
     const executions = await prisma.taskExecution.findMany({
       where,
       orderBy: { createdAt: "desc" },
-      take: 25,
+      take,
       select: {
         id: true,
         clickupTaskId: true,

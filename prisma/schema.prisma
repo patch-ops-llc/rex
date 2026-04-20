@@ -464,16 +464,19 @@ model HubSpotPortal {
 // ============================================================
 
 model ClickUpConnection {
-  id            String              @id @default(cuid())
-  name          String
-  apiToken      String              // encrypted via aes-256-gcm
-  listId        String
-  isActive      Boolean             @default(true)
-  lastSyncAt    DateTime?
-  createdAt     DateTime            @default(now())
-  updatedAt     DateTime            @updatedAt
-  executions    TaskExecution[]
-  feasibilities TaskFeasibility[]
+  id               String              @id @default(cuid())
+  name             String
+  apiToken         String              // encrypted via aes-256-gcm
+  listId           String
+  isActive         Boolean             @default(true)
+  // ClickUp status name to set on a task when an EXECUTE run finishes
+  // with status=SUCCESS. Optional; null disables auto-update.
+  completionStatus String?
+  lastSyncAt       DateTime?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+  executions       TaskExecution[]
+  feasibilities    TaskFeasibility[]
 }
 
 model TaskFeasibility {

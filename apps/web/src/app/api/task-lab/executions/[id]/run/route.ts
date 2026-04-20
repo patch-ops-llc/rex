@@ -5,6 +5,7 @@ import {
   type ExecutionPlan,
   type StepResult,
 } from "@/lib/task-lab-ai";
+import { loadConnection, updateTask } from "@/lib/clickup";
 
 /**
  * POST /api/task-lab/executions/:id/run
@@ -22,6 +23,7 @@ export async function POST(
     const confirmedSteps: number[] = Array.isArray(body?.confirmedSteps)
       ? body.confirmedSteps
       : [];
+    const markComplete = body?.markComplete === true;
 
     const execution = await prisma.taskExecution.findUnique({
       where: { id: params.id },
@@ -93,6 +95,42 @@ export async function POST(
       finalStatus = ok === 0 && dry === 0 ? "FAILED" : "PARTIAL";
     }
 
+    // Auto-update ClickUp task status if user requested it AND this was a
+    // real execute that fully succeeded.
+    let clickupUpdate: { ok: boolean; status?: string; error?: string } | null =
+      null;
+    if (
+      markComplete &&
+      mode === "EXECUTE" &&
+      finalStatus === "SUCCESS"
+    ) {
+      try {
+        const conn = await prisma.clickUpConnection.findUnique({
+          where: { id: execution.connectionId },
+          select: { completionStatus: true },
+        });
+        const targetStatus = conn?.completionStatus?.trim();
+        if (!targetStatus) {
+          clickupUpdate = {
+            ok: false,
+            error:
+              "Connection has no completionStatus configured; skipping ClickUp update.",
+          };
+        } else {
+          const fullConn = await loadConnection(execution.connectionId);
+          await updateTask(fullConn, execution.clickupTaskId, {
+            status: targetStatus,
+          });
+          clickupUpdate = { ok: true, status: targetStatus };
+        }
+      } catch (err: any) {
+        clickupUpdate = {
+          ok: false,
+          error: err?.message || "ClickUp status update failed",
+        };
+      }
+    }
+
     await prisma.taskExecution.update({
       where: { id: execution.id },
       data: {
@@ -106,6 +144,7 @@ export async function POST(
       executionId: execution.id,
       mode,
       status: finalStatus,
+      clickupUpdate,
       summary: {
         total: results.length,
         ok,

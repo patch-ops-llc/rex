@@ -12,6 +12,7 @@ export default async function TaskLabPage() {
         id: true,
         name: true,
         listId: true,
+        completionStatus: true,
         isActive: true,
         lastSyncAt: true,
         createdAt: true,

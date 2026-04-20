@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import {
   Card,
   CardContent,
@@ -59,6 +58,7 @@ interface Connection {
   id: string;
   name: string;
   listId: string;
+  completionStatus?: string | null;
   isActive: boolean;
   lastSyncAt: string | null;
   createdAt: string;
@@ -115,6 +115,38 @@ interface ExecutionState {
   status: string;
 }
 
+// One in-flight or completed plan, keyed by ClickUp task id (one panel per task)
+interface PlanState {
+  task: ClickUpTask;
+  executionId: string | null; // null while initial plan API is in flight
+  plan: ExecutionPlan | null;
+  results: StepResult[] | null;
+  mode: "PLAN" | "DRY_RUN" | "EXECUTE";
+  status: string;
+  busy: "plan" | "dry" | "exec" | null;
+  error: string;
+  confirmedSteps: Set<number>;
+  markComplete: boolean;
+  clickupUpdate?: {
+    ok: boolean;
+    status?: string;
+    error?: string;
+  } | null;
+}
+
+interface ExecutionHistoryRow {
+  id: string;
+  clickupTaskId: string;
+  taskName: string;
+  portalId: string;
+  hubspotPortalId: string | null;
+  mode: "PLAN" | "DRY_RUN" | "EXECUTE";
+  status: string;
+  errorMessage?: string | null;
+  createdAt: string;
+  completedAt: string | null;
+}
+
 type FeasibilityVerdict = "AUTOMATABLE" | "PARTIAL" | "HUMAN" | "UNCLEAR";
 
 interface FeasibilityRow {
@@ -138,7 +170,6 @@ export function TaskLabView({
   initialConnections,
   portals,
 }: TaskLabViewProps) {
-  const router = useRouter();
   const [connections, setConnections] = useState<Connection[]>(initialConnections);
   const [activeConnectionId, setActiveConnectionId] = useState<string>(
     initialConnections[0]?.id || ""
@@ -161,25 +192,32 @@ export function TaskLabView({
     "ALL" | FeasibilityVerdict | "UNANALYZED"
   >("ALL");
 
-  const [activeTask, setActiveTask] = useState<ClickUpTask | null>(null);
-  const [execution, setExecution] = useState<ExecutionState | null>(null);
-  const [executionBusy, setExecutionBusy] = useState<
-    "plan" | "dry" | "exec" | null
-  >(null);
-  const [executionError, setExecutionError] = useState("");
-  const [confirmedSteps, setConfirmedSteps] = useState<Set<number>>(new Set());
+  // Multi-plan state — one entry per task currently being planned/run
+  const [plans, setPlans] = useState<PlanState[]>([]);
+  const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(
+    new Set()
+  );
   const [topError, setTopError] = useState("");
   const executionPanelRef = useRef<HTMLDivElement | null>(null);
+  const lastPlanCountRef = useRef(0);
 
-  // Scroll execution panel into view whenever a new task is selected
+  // History (recent runs across this connection)
+  const [history, setHistory] = useState<ExecutionHistoryRow[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  // Scroll execution panel into view when a new plan is added
   useEffect(() => {
-    if (activeTask && executionPanelRef.current) {
+    if (
+      plans.length > lastPlanCountRef.current &&
+      executionPanelRef.current
+    ) {
       executionPanelRef.current.scrollIntoView({
         behavior: "smooth",
         block: "start",
       });
     }
-  }, [activeTask]);
+    lastPlanCountRef.current = plans.length;
+  }, [plans.length]);
 
   const refreshConnections = useCallback(async () => {
     const res = await fetch("/api/task-lab/connections");
@@ -271,7 +309,127 @@ export function TaskLabView({
     [portals, activePortalId]
   );
 
-  // ----- Plan / Run actions
+  // ----- History
+
+  const loadHistory = useCallback(async () => {
+    if (!activeConnectionId) {
+      setHistory([]);
+      return;
+    }
+    setHistoryLoading(true);
+    try {
+      const res = await fetch(
+        `/api/task-lab/executions?connectionId=${activeConnectionId}&limit=50`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        setHistory(data.executions || []);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [activeConnectionId]);
+
+  useEffect(() => {
+    loadHistory();
+  }, [loadHistory]);
+
+  const historyByTaskId = useMemo(() => {
+    const map = new Map<string, ExecutionHistoryRow[]>();
+    for (const row of history) {
+      const arr = map.get(row.clickupTaskId) || [];
+      arr.push(row);
+      map.set(row.clickupTaskId, arr);
+    }
+    return map;
+  }, [history]);
+
+  // ----- Plan / Run actions (multi)
+
+  function patchPlan(taskId: string, patch: Partial<PlanState>) {
+    setPlans((prev) =>
+      prev.map((p) => (p.task.id === taskId ? { ...p, ...patch } : p))
+    );
+  }
+
+  function removePlan(taskId: string) {
+    setPlans((prev) => prev.filter((p) => p.task.id !== taskId));
+  }
+
+  function toggleConfirmFor(taskId: string, stepIndex: number) {
+    setPlans((prev) =>
+      prev.map((p) => {
+        if (p.task.id !== taskId) return p;
+        const next = new Set(p.confirmedSteps);
+        if (next.has(stepIndex)) next.delete(stepIndex);
+        else next.add(stepIndex);
+        return { ...p, confirmedSteps: next };
+      })
+    );
+  }
+
+  function setMarkCompleteFor(taskId: string, val: boolean) {
+    patchPlan(taskId, { markComplete: val });
+  }
+
+  async function planOne(task: ClickUpTask): Promise<void> {
+    if (!activeConnectionId || !activePortalId) return;
+
+    // If already planned, do nothing (re-planning is rare; just close+re-add).
+    setPlans((prev) => {
+      if (prev.some((p) => p.task.id === task.id)) return prev;
+      return [
+        ...prev,
+        {
+          task,
+          executionId: null,
+          plan: null,
+          results: null,
+          mode: "PLAN",
+          status: "PENDING",
+          busy: "plan",
+          error: "",
+          confirmedSteps: new Set(),
+          markComplete: false,
+          clickupUpdate: null,
+        },
+      ];
+    });
+
+    try {
+      const res = await fetch("/api/task-lab/plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          connectionId: activeConnectionId,
+          clickupTaskId: task.id,
+          portalId: activePortalId,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        patchPlan(task.id, {
+          busy: null,
+          error: data.error || `Planning failed (HTTP ${res.status})`,
+        });
+      } else {
+        patchPlan(task.id, {
+          busy: null,
+          executionId: data.executionId,
+          plan: data.plan,
+          mode: "PLAN",
+          status: "PENDING",
+        });
+      }
+    } catch (err: any) {
+      patchPlan(task.id, {
+        busy: null,
+        error: err?.message || "Planning failed (network error)",
+      });
+    }
+  }
 
   async function handlePlan(task: ClickUpTask) {
     setTopError("");
@@ -285,83 +443,100 @@ export function TaskLabView({
       );
       return;
     }
-    // Show panel + loading state IMMEDIATELY so the user sees something happen
-    setActiveTask(task);
-    setExecution(null);
-    setExecutionError("");
-    setConfirmedSteps(new Set());
-    setExecutionBusy("plan");
-    try {
-      const res = await fetch("/api/task-lab/plan", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          connectionId: activeConnectionId,
-          clickupTaskId: task.id,
-          portalId: activePortalId,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setExecutionError(data.error || `Planning failed (HTTP ${res.status})`);
-      } else {
-        setExecution({
-          executionId: data.executionId,
-          plan: data.plan,
-          results: null,
-          mode: "PLAN",
-          status: "PENDING",
-        });
-      }
-    } catch (err: any) {
-      setExecutionError(err?.message || "Planning failed (network error)");
-    } finally {
-      setExecutionBusy(null);
-    }
+    await planOne(task);
   }
 
-  async function handleRun(mode: "DRY_RUN" | "EXECUTE") {
-    if (!execution) return;
-    setExecutionBusy(mode === "DRY_RUN" ? "dry" : "exec");
-    setExecutionError("");
+  async function handlePlanSelected() {
+    setTopError("");
+    if (!activeConnectionId) {
+      setTopError("No ClickUp connection selected.");
+      return;
+    }
+    if (!activePortalId) {
+      setTopError(
+        "Pick a HubSpot portal in the Tasks card before planning tasks."
+      );
+      return;
+    }
+    if (selectedTaskIds.size === 0) return;
+
+    const selected = tasks.filter((t) => selectedTaskIds.has(t.id));
+    setSelectedTaskIds(new Set());
+    // Fire all in parallel — Promise.all so the panel re-renders progressively
+    // (each planOne updates state independently as it completes).
+    await Promise.all(selected.map((t) => planOne(t)));
+  }
+
+  async function handleRun(taskId: string, mode: "DRY_RUN" | "EXECUTE") {
+    const plan = plans.find((p) => p.task.id === taskId);
+    if (!plan || !plan.executionId) return;
+    patchPlan(taskId, {
+      busy: mode === "DRY_RUN" ? "dry" : "exec",
+      error: "",
+      clickupUpdate: null,
+    });
     try {
       const res = await fetch(
-        `/api/task-lab/executions/${execution.executionId}/run`,
+        `/api/task-lab/executions/${plan.executionId}/run`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             mode,
-            confirmedSteps: Array.from(confirmedSteps),
+            confirmedSteps: Array.from(plan.confirmedSteps),
+            markComplete: plan.markComplete,
           }),
         }
       );
       const data = await res.json();
       if (!res.ok) {
-        setExecutionError(data.error || "Execution failed");
+        patchPlan(taskId, {
+          busy: null,
+          error: data.error || "Execution failed",
+        });
       } else {
-        setExecution({
-          ...execution,
+        patchPlan(taskId, {
+          busy: null,
           mode,
           status: data.status,
           results: data.results,
+          clickupUpdate: data.clickupUpdate ?? null,
         });
+        // Refresh history + tasks (status may have changed)
+        loadHistory();
+        if (mode === "EXECUTE" && data.clickupUpdate?.ok) loadTasks();
       }
     } catch (err: any) {
-      setExecutionError(err?.message || "Execution failed");
-    } finally {
-      setExecutionBusy(null);
+      patchPlan(taskId, {
+        busy: null,
+        error: err?.message || "Execution failed",
+      });
     }
   }
 
-  function toggleConfirm(stepIndex: number) {
-    setConfirmedSteps((prev) => {
+  // ----- Selection helpers
+
+  function toggleSelect(taskId: string) {
+    setSelectedTaskIds((prev) => {
       const next = new Set(prev);
-      if (next.has(stepIndex)) next.delete(stepIndex);
-      else next.add(stepIndex);
+      if (next.has(taskId)) next.delete(taskId);
+      else next.add(taskId);
       return next;
     });
   }
+
+  function clearSelection() {
+    setSelectedTaskIds(new Set());
+  }
+
+  function selectAllVisible(ids: string[]) {
+    setSelectedTaskIds(new Set(ids));
+  }
+
+  const activeConnection = useMemo(
+    () => connections.find((c) => c.id === activeConnectionId) || null,
+    [connections, activeConnectionId]
+  );
 
   // ---------------------------------------------------------------------
   return (
@@ -481,35 +656,80 @@ export function TaskLabView({
             <TaskTable
               tasks={tasks}
               connectionId={activeConnectionId}
-              activeTaskId={activeTask?.id || null}
               hasPortal={!!activePortalId}
               onPlan={handlePlan}
               onChanged={loadTasks}
               feasibility={feasibility}
               feasibilityFilter={feasibilityFilter}
+              selectedTaskIds={selectedTaskIds}
+              onToggleSelect={toggleSelect}
+              onSelectAllVisible={selectAllVisible}
+              onClearSelection={clearSelection}
+              onPlanSelected={handlePlanSelected}
+              activeTaskIds={new Set(plans.map((p) => p.task.id))}
+              historyByTaskId={historyByTaskId}
             />
           )}
         </CardContent>
       </Card>
 
-      <div ref={executionPanelRef}>
-        <ExecutionPanel
-          task={activeTask}
-          portal={activePortal}
-          execution={execution}
-          busy={executionBusy}
-          error={executionError}
-          confirmedSteps={confirmedSteps}
-          onToggleConfirm={toggleConfirm}
-          onRun={handleRun}
-          onClose={() => {
-            setActiveTask(null);
-            setExecution(null);
-            setExecutionError("");
-            setConfirmedSteps(new Set());
-          }}
-        />
+      <div ref={executionPanelRef} className="space-y-4">
+        {plans.length > 0 && (
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold">
+              Active plans ({plans.length})
+            </h2>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setPlans([])}
+              title="Close all open plans"
+            >
+              <XCircle className="mr-1.5 h-4 w-4" />
+              Close all
+            </Button>
+          </div>
+        )}
+        {plans.map((p) => (
+          <ExecutionPanel
+            key={p.task.id}
+            task={p.task}
+            portal={activePortal}
+            execution={
+              p.plan
+                ? {
+                    executionId: p.executionId || "",
+                    plan: p.plan,
+                    results: p.results,
+                    mode: p.mode,
+                    status: p.status,
+                  }
+                : null
+            }
+            busy={p.busy}
+            error={p.error}
+            confirmedSteps={p.confirmedSteps}
+            onToggleConfirm={(stepIndex: number) =>
+              toggleConfirmFor(p.task.id, stepIndex)
+            }
+            onRun={(mode) => handleRun(p.task.id, mode)}
+            onClose={() => removePlan(p.task.id)}
+            connectionCompletionStatus={
+              activeConnection?.completionStatus || null
+            }
+            markComplete={p.markComplete}
+            onMarkCompleteChange={(v) => setMarkCompleteFor(p.task.id, v)}
+            clickupUpdate={p.clickupUpdate ?? null}
+          />
+        ))}
       </div>
+
+      <HistoryCard
+        history={history}
+        loading={historyLoading}
+        onRefresh={loadHistory}
+        portals={portals}
+      />
     </div>
   );
 }
@@ -595,30 +815,45 @@ function ConnectionsCard({
                     className="h-4 w-4"
                   />
                   <div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-medium">{c.name}</span>
                       <Badge variant={c.isActive ? "success" : "destructive"}>
                         {c.isActive ? "Verified" : "Unverified"}
                       </Badge>
+                      {c.completionStatus ? (
+                        <Badge variant="secondary" className="font-mono">
+                          ✓ on success → &quot;{c.completionStatus}&quot;
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-muted-foreground">
+                          no auto-complete
+                        </Badge>
+                      )}
                     </div>
                     <div className="text-xs text-muted-foreground">
                       List: {c.listId}
                     </div>
                   </div>
                 </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={async () => {
-                    if (!confirm(`Delete connection "${c.name}"?`)) return;
-                    await fetch(`/api/task-lab/connections/${c.id}`, {
-                      method: "DELETE",
-                    });
-                    onConnectionsChanged();
-                  }}
-                >
-                  <Trash2 className="h-4 w-4 text-muted-foreground" />
-                </Button>
+                <div className="flex items-center gap-1">
+                  <EditConnectionDialog
+                    connection={c}
+                    onUpdated={onConnectionsChanged}
+                  />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={async () => {
+                      if (!confirm(`Delete connection "${c.name}"?`)) return;
+                      await fetch(`/api/task-lab/connections/${c.id}`, {
+                        method: "DELETE",
+                      });
+                      onConnectionsChanged();
+                    }}
+                  >
+                    <Trash2 className="h-4 w-4 text-muted-foreground" />
+                  </Button>
+                </div>
               </div>
             ))}
           </div>
@@ -722,6 +957,136 @@ function AddConnectionDialog({ onCreated }: { onCreated: () => void }) {
           <DialogFooter>
             <Button type="submit" disabled={loading}>
               {loading ? "Adding…" : "Add Connection"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EditConnectionDialog({
+  connection,
+  onUpdated,
+}: {
+  connection: Connection;
+  onUpdated: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [form, setForm] = useState({
+    name: connection.name,
+    listId: connection.listId,
+    completionStatus: connection.completionStatus || "",
+  });
+
+  useEffect(() => {
+    if (open) {
+      setForm({
+        name: connection.name,
+        listId: connection.listId,
+        completionStatus: connection.completionStatus || "",
+      });
+      setError("");
+    }
+  }, [open, connection]);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setLoading(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/task-lab/connections/${connection.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: form.name,
+          listId: form.listId,
+          completionStatus: form.completionStatus.trim() || null,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "Failed to update connection");
+        return;
+      }
+      setOpen(false);
+      onUpdated();
+    } catch (err: any) {
+      setError(err?.message || "Failed to update connection");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button variant="ghost" size="sm" title="Edit connection">
+          <Sparkles className="h-3.5 w-3.5 text-muted-foreground" />
+        </Button>
+      </DialogTrigger>
+      <DialogContent>
+        <form onSubmit={submit}>
+          <DialogHeader>
+            <DialogTitle>Edit Connection</DialogTitle>
+            <DialogDescription>
+              Update name, list ID, or the ClickUp status to set on tasks
+              after a successful live execute.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid gap-2">
+              <Label htmlFor="cu-edit-name">Name</Label>
+              <Input
+                id="cu-edit-name"
+                value={form.name}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, name: e.target.value }))
+                }
+                required
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="cu-edit-list">List ID</Label>
+              <Input
+                id="cu-edit-list"
+                value={form.listId}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, listId: e.target.value }))
+                }
+                required
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="cu-edit-completion">
+                Completion status (optional)
+              </Label>
+              <Input
+                id="cu-edit-completion"
+                placeholder="e.g. complete, done, ready for QA"
+                value={form.completionStatus}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, completionStatus: e.target.value }))
+                }
+              />
+              <p className="text-xs text-muted-foreground">
+                When set, Rex will move the ClickUp task to this status after a
+                successful live execute (only when the user opts in per run).
+                Leave blank to disable. Status name must match exactly what
+                exists in your ClickUp list.
+              </p>
+            </div>
+          </div>
+          {error && (
+            <div className="rounded-lg bg-red-50 dark:bg-red-950 px-4 py-3 text-sm text-red-800 dark:text-red-200 mb-4">
+              {error}
+            </div>
+          )}
+          <DialogFooter>
+            <Button type="submit" disabled={loading}>
+              {loading ? "Saving…" : "Save"}
             </Button>
           </DialogFooter>
         </form>
@@ -860,21 +1225,33 @@ function buildTaskTree(tasks: ClickUpTask[]): {
 function TaskTable({
   tasks,
   connectionId,
-  activeTaskId,
   hasPortal,
   onPlan,
   onChanged,
   feasibility,
   feasibilityFilter,
+  selectedTaskIds,
+  onToggleSelect,
+  onSelectAllVisible,
+  onClearSelection,
+  onPlanSelected,
+  activeTaskIds,
+  historyByTaskId,
 }: {
   tasks: ClickUpTask[];
   connectionId: string;
-  activeTaskId: string | null;
   hasPortal: boolean;
   onPlan: (task: ClickUpTask) => void;
   onChanged: () => void;
   feasibility: Map<string, FeasibilityRow>;
   feasibilityFilter: "ALL" | FeasibilityVerdict | "UNANALYZED";
+  selectedTaskIds: Set<string>;
+  onToggleSelect: (taskId: string) => void;
+  onSelectAllVisible: (ids: string[]) => void;
+  onClearSelection: () => void;
+  onPlanSelected: () => void;
+  activeTaskIds: Set<string>;
+  historyByTaskId: Map<string, ExecutionHistoryRow[]>;
 }) {
   // Apply filter, but always keep ancestors of matching tasks so the tree
   // structure stays intact.
@@ -944,10 +1321,44 @@ function TaskTable({
     totalParents > 0 &&
     Array.from(childrenOf.keys()).every((id) => expanded.has(id));
 
+  const visibleIds = filteredTasks.map((t) => t.id);
+  const allVisibleSelected =
+    visibleIds.length > 0 && visibleIds.every((id) => selectedTaskIds.has(id));
+
   return (
     <div className="space-y-2">
-      {totalParents > 0 && (
-        <div className="flex items-center justify-end gap-2">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2">
+          {selectedTaskIds.size > 0 ? (
+            <>
+              <Badge variant="secondary" className="font-mono">
+                {selectedTaskIds.size} selected
+              </Badge>
+              <Button
+                size="sm"
+                variant="default"
+                onClick={onPlanSelected}
+                disabled={!hasPortal}
+                title={
+                  hasPortal
+                    ? "Generate AI execution plans for all selected tasks in parallel"
+                    : "Pick a HubSpot portal first"
+                }
+              >
+                <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+                Plan {selectedTaskIds.size} in parallel
+              </Button>
+              <Button size="sm" variant="ghost" onClick={onClearSelection}>
+                Clear
+              </Button>
+            </>
+          ) : (
+            <span className="text-xs text-muted-foreground">
+              Select rows to plan multiple at once
+            </span>
+          )}
+        </div>
+        {totalParents > 0 && (
           <Button
             variant="ghost"
             size="sm"
@@ -965,17 +1376,30 @@ function TaskTable({
               </>
             )}
           </Button>
-        </div>
-      )}
+        )}
+      </div>
       <div className="overflow-x-auto rounded-lg border">
         <table className="w-full text-sm">
           <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
             <tr>
+              <th className="px-3 py-2 font-medium w-10">
+                <input
+                  type="checkbox"
+                  aria-label="Select all visible"
+                  checked={allVisibleSelected}
+                  onChange={(e) => {
+                    if (e.target.checked) onSelectAllVisible(visibleIds);
+                    else onClearSelection();
+                  }}
+                  className="h-4 w-4 cursor-pointer"
+                />
+              </th>
               <th className="px-3 py-2 font-medium">Task</th>
               <th className="px-3 py-2 font-medium">AI Verdict</th>
               <th className="px-3 py-2 font-medium">Status</th>
               <th className="px-3 py-2 font-medium">Priority</th>
               <th className="px-3 py-2 font-medium">Due</th>
+              <th className="px-3 py-2 font-medium">Runs</th>
               <th className="px-3 py-2 font-medium text-right">Actions</th>
             </tr>
           </thead>
@@ -989,11 +1413,14 @@ function TaskTable({
                 expanded={expanded}
                 onToggle={toggle}
                 connectionId={connectionId}
-                activeTaskId={activeTaskId}
+                activeTaskIds={activeTaskIds}
                 hasPortal={hasPortal}
                 onPlan={onPlan}
                 onChanged={onChanged}
                 feasibility={feasibility}
+                selectedTaskIds={selectedTaskIds}
+                onToggleSelect={onToggleSelect}
+                historyByTaskId={historyByTaskId}
               />
             ))}
           </tbody>
@@ -1010,11 +1437,14 @@ function TaskRowGroup({
   expanded,
   onToggle,
   connectionId,
-  activeTaskId,
+  activeTaskIds,
   hasPortal,
   onPlan,
   onChanged,
   feasibility,
+  selectedTaskIds,
+  onToggleSelect,
+  historyByTaskId,
 }: {
   task: ClickUpTask;
   depth: number;
@@ -1022,24 +1452,41 @@ function TaskRowGroup({
   expanded: Set<string>;
   onToggle: (id: string) => void;
   connectionId: string;
-  activeTaskId: string | null;
+  activeTaskIds: Set<string>;
   hasPortal: boolean;
   onPlan: (task: ClickUpTask) => void;
   onChanged: () => void;
   feasibility: Map<string, FeasibilityRow>;
+  selectedTaskIds: Set<string>;
+  onToggleSelect: (taskId: string) => void;
+  historyByTaskId: Map<string, ExecutionHistoryRow[]>;
 }) {
   const children = childrenOf.get(task.id) || [];
   const hasChildren = children.length > 0;
   const isOpen = expanded.has(task.id);
   const verdict = feasibility.get(task.id);
+  const isActive = activeTaskIds.has(task.id);
+  const isSelected = selectedTaskIds.has(task.id);
+  const taskRuns = historyByTaskId.get(task.id) || [];
+  const runCount = taskRuns.length;
+  const lastRun = taskRuns[0];
 
   return (
     <>
       <tr
         className={`border-t ${
-          task.id === activeTaskId ? "bg-primary/5" : ""
+          isActive ? "bg-primary/5" : ""
         } ${depth === 0 && hasChildren ? "bg-muted/20" : ""}`}
       >
+        <td className="px-3 py-2 align-top">
+          <input
+            type="checkbox"
+            aria-label={`Select ${task.name}`}
+            checked={isSelected}
+            onChange={() => onToggleSelect(task.id)}
+            className="h-4 w-4 cursor-pointer mt-1"
+          />
+        </td>
         <td className="px-3 py-2">
           <div
             className="flex items-start gap-1"
@@ -1097,6 +1544,19 @@ function TaskRowGroup({
             ? new Date(parseInt(task.due_date, 10)).toLocaleDateString()
             : "—"}
         </td>
+        <td className="px-3 py-2 text-xs">
+          {runCount === 0 ? (
+            <span className="text-muted-foreground">—</span>
+          ) : (
+            <span
+              className="inline-flex items-center gap-1 text-muted-foreground"
+              title={lastRun ? `Last run: ${lastRun.mode} → ${lastRun.status} on ${new Date(lastRun.createdAt).toLocaleString()}` : ""}
+            >
+              <RunStatusDot status={lastRun?.status || ""} />
+              {runCount} run{runCount === 1 ? "" : "s"}
+            </span>
+          )}
+        </td>
         <td className="px-3 py-2 text-right">
           <div className="flex justify-end gap-1">
             {task.url && (
@@ -1112,17 +1572,19 @@ function TaskRowGroup({
             )}
             <Button
               size="sm"
-              variant="default"
+              variant={isActive ? "secondary" : "default"}
               onClick={() => onPlan(task)}
-              disabled={!hasPortal}
+              disabled={!hasPortal || isActive}
               title={
-                hasPortal
-                  ? "Generate AI execution plan"
-                  : "Pick a HubSpot portal first"
+                isActive
+                  ? "Plan already open below"
+                  : hasPortal
+                    ? "Generate AI execution plan"
+                    : "Pick a HubSpot portal first"
               }
             >
               <Sparkles className="mr-1 h-3.5 w-3.5" />
-              Plan
+              {isActive ? "Open" : "Plan"}
             </Button>
             <Button
               size="sm"
@@ -1152,15 +1614,32 @@ function TaskRowGroup({
             expanded={expanded}
             onToggle={onToggle}
             connectionId={connectionId}
-            activeTaskId={activeTaskId}
+            activeTaskIds={activeTaskIds}
             hasPortal={hasPortal}
             onPlan={onPlan}
             onChanged={onChanged}
             feasibility={feasibility}
+            selectedTaskIds={selectedTaskIds}
+            onToggleSelect={onToggleSelect}
+            historyByTaskId={historyByTaskId}
           />
         ))}
     </>
   );
+}
+
+function RunStatusDot({ status }: { status: string }) {
+  const cls =
+    status === "SUCCESS"
+      ? "bg-emerald-500"
+      : status === "PARTIAL"
+        ? "bg-amber-500"
+        : status === "FAILED"
+          ? "bg-rose-500"
+          : status === "RUNNING" || status === "PLANNING"
+            ? "bg-sky-500 animate-pulse"
+            : "bg-slate-400";
+  return <span className={`h-2 w-2 rounded-full inline-block ${cls}`} />;
 }
 
 // ---------- Feasibility helpers ------------------------------------------
@@ -1314,6 +1793,10 @@ function ExecutionPanel({
   onToggleConfirm,
   onRun,
   onClose,
+  connectionCompletionStatus,
+  markComplete,
+  onMarkCompleteChange,
+  clickupUpdate,
 }: {
   task: ClickUpTask | null;
   portal: Portal | null;
@@ -1324,6 +1807,10 @@ function ExecutionPanel({
   onToggleConfirm: (i: number) => void;
   onRun: (mode: "DRY_RUN" | "EXECUTE") => void;
   onClose: () => void;
+  connectionCompletionStatus?: string | null;
+  markComplete?: boolean;
+  onMarkCompleteChange?: (v: boolean) => void;
+  clickupUpdate?: { ok: boolean; status?: string; error?: string } | null;
 }) {
   if (!task) return null;
 
@@ -1488,44 +1975,89 @@ function ExecutionPanel({
               )}
             </div>
 
-            <div className="flex items-center gap-2 pt-2 border-t">
-              <Button
-                variant="outline"
-                onClick={() => onRun("DRY_RUN")}
-                disabled={busy !== null || execution.plan.steps.length === 0}
-              >
-                {busy === "dry" ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <Eye className="mr-2 h-4 w-4" />
+            <div className="flex flex-col gap-2 pt-2 border-t">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Button
+                  variant="outline"
+                  onClick={() => onRun("DRY_RUN")}
+                  disabled={busy !== null || execution.plan.steps.length === 0}
+                >
+                  {busy === "dry" ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Eye className="mr-2 h-4 w-4" />
+                  )}
+                  Dry Run
+                </Button>
+                <Button
+                  onClick={() => onRun("EXECUTE")}
+                  disabled={
+                    busy !== null ||
+                    execution.plan.steps.length === 0 ||
+                    !allConfirmed
+                  }
+                  title={
+                    !allConfirmed
+                      ? "Confirm all destructive steps first"
+                      : "Execute plan against live HubSpot"
+                  }
+                >
+                  {busy === "exec" ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <PlayCircle className="mr-2 h-4 w-4" />
+                  )}
+                  Execute Live
+                </Button>
+                {execution.results && (
+                  <ExecutionResultBadge
+                    status={execution.status}
+                    mode={execution.mode}
+                  />
                 )}
-                Dry Run
-              </Button>
-              <Button
-                onClick={() => onRun("EXECUTE")}
-                disabled={
-                  busy !== null ||
-                  execution.plan.steps.length === 0 ||
-                  !allConfirmed
-                }
-                title={
-                  !allConfirmed
-                    ? "Confirm all destructive steps first"
-                    : "Execute plan against live HubSpot"
-                }
-              >
-                {busy === "exec" ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <PlayCircle className="mr-2 h-4 w-4" />
-                )}
-                Execute Live
-              </Button>
-              {execution.results && (
-                <ExecutionResultBadge
-                  status={execution.status}
-                  mode={execution.mode}
-                />
+              </div>
+              {onMarkCompleteChange && (
+                <label
+                  className={`flex items-center gap-2 text-xs ${
+                    connectionCompletionStatus
+                      ? "text-foreground"
+                      : "text-muted-foreground cursor-not-allowed"
+                  }`}
+                  title={
+                    connectionCompletionStatus
+                      ? `Sets ClickUp task status to "${connectionCompletionStatus}" if execute succeeds.`
+                      : "Set a completion status on the connection (Edit) to enable this."
+                  }
+                >
+                  <input
+                    type="checkbox"
+                    checked={!!markComplete}
+                    disabled={!connectionCompletionStatus}
+                    onChange={(e) => onMarkCompleteChange(e.target.checked)}
+                    className="h-3.5 w-3.5"
+                  />
+                  Mark ClickUp task as &quot;
+                  {connectionCompletionStatus || "(not configured)"}&quot;
+                  on successful execute
+                </label>
+              )}
+              {clickupUpdate && (
+                <div
+                  className={`text-xs rounded-md px-3 py-2 ${
+                    clickupUpdate.ok
+                      ? "bg-emerald-50 dark:bg-emerald-950 text-emerald-900 dark:text-emerald-100"
+                      : "bg-amber-50 dark:bg-amber-950 text-amber-900 dark:text-amber-100"
+                  }`}
+                >
+                  {clickupUpdate.ok ? (
+                    <>
+                      ✓ ClickUp task moved to{" "}
+                      <span className="font-mono">{clickupUpdate.status}</span>
+                    </>
+                  ) : (
+                    <>ClickUp update skipped: {clickupUpdate.error}</>
+                  )}
+                </div>
               )}
             </div>
           </>
@@ -1594,5 +2126,152 @@ function ExecutionResultBadge({
     <Badge variant="secondary" className="ml-2">
       {status}
     </Badge>
+  );
+}
+
+// ---------- History card --------------------------------------------------
+
+function HistoryCard({
+  history,
+  loading,
+  onRefresh,
+  portals,
+}: {
+  history: ExecutionHistoryRow[];
+  loading: boolean;
+  onRefresh: () => void;
+  portals: Portal[];
+}) {
+  const portalById = useMemo(
+    () => new Map(portals.map((p) => [p.id, p])),
+    [portals]
+  );
+
+  const summary = useMemo(() => {
+    let success = 0;
+    let partial = 0;
+    let failed = 0;
+    let other = 0;
+    let live = 0;
+    for (const r of history) {
+      if (r.mode === "EXECUTE") live++;
+      if (r.status === "SUCCESS") success++;
+      else if (r.status === "PARTIAL") partial++;
+      else if (r.status === "FAILED") failed++;
+      else other++;
+    }
+    return { total: history.length, success, partial, failed, other, live };
+  }, [history]);
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-start justify-between gap-4">
+        <div>
+          <CardTitle>Recent runs</CardTitle>
+          <CardDescription>
+            {history.length === 0
+              ? "No execution history yet for this connection."
+              : `${summary.total} total · ${summary.live} live · ${summary.success} success · ${summary.partial} partial · ${summary.failed} failed`}
+          </CardDescription>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onRefresh}
+          disabled={loading}
+        >
+          <RefreshCw
+            className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`}
+          />
+          Refresh
+        </Button>
+      </CardHeader>
+      <CardContent>
+        {history.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-4 text-center">
+            Plan and execute a task to see it appear here.
+          </p>
+        ) : (
+          <div className="overflow-x-auto rounded-lg border">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
+                <tr>
+                  <th className="px-3 py-2 font-medium">When</th>
+                  <th className="px-3 py-2 font-medium">Task</th>
+                  <th className="px-3 py-2 font-medium">Mode</th>
+                  <th className="px-3 py-2 font-medium">Status</th>
+                  <th className="px-3 py-2 font-medium">Portal</th>
+                  <th className="px-3 py-2 font-medium">Took</th>
+                </tr>
+              </thead>
+              <tbody>
+                {history.map((row) => {
+                  const portal = portalById.get(row.portalId);
+                  const took =
+                    row.completedAt && row.createdAt
+                      ? `${Math.round(
+                          (new Date(row.completedAt).getTime() -
+                            new Date(row.createdAt).getTime()) /
+                            1000
+                        )}s`
+                      : "—";
+                  return (
+                    <tr key={row.id} className="border-t align-top">
+                      <td className="px-3 py-2 text-xs text-muted-foreground whitespace-nowrap">
+                        {new Date(row.createdAt).toLocaleString()}
+                      </td>
+                      <td className="px-3 py-2">
+                        <div className="font-medium truncate max-w-[280px]">
+                          {row.taskName}
+                        </div>
+                        {row.errorMessage && (
+                          <div className="text-xs text-red-700 dark:text-red-400 truncate max-w-[280px]">
+                            {row.errorMessage}
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-3 py-2">
+                        <Badge
+                          variant={
+                            row.mode === "EXECUTE"
+                              ? "default"
+                              : row.mode === "DRY_RUN"
+                                ? "secondary"
+                                : "outline"
+                          }
+                        >
+                          {row.mode}
+                        </Badge>
+                      </td>
+                      <td className="px-3 py-2">
+                        <span className="inline-flex items-center gap-1.5 text-xs">
+                          <RunStatusDot status={row.status} />
+                          {row.status}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-xs text-muted-foreground">
+                        {portal ? (
+                          <>
+                            {portal.name}{" "}
+                            <span className="font-mono opacity-60">
+                              ({portal.portalId})
+                            </span>
+                          </>
+                        ) : (
+                          row.hubspotPortalId || "—"
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-xs text-muted-foreground whitespace-nowrap">
+                        {took}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
