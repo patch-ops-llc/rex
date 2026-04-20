@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Card,
@@ -47,6 +47,10 @@ import {
   ChevronDown,
   ChevronsDownUp,
   ChevronsUpDown,
+  Brain,
+  HelpCircle,
+  HandMetal,
+  Bot,
 } from "lucide-react";
 
 // ---------- Types ---------------------------------------------------------
@@ -111,6 +115,18 @@ interface ExecutionState {
   status: string;
 }
 
+type FeasibilityVerdict = "AUTOMATABLE" | "PARTIAL" | "HUMAN" | "UNCLEAR";
+
+interface FeasibilityRow {
+  clickupTaskId: string;
+  taskName: string;
+  verdict: FeasibilityVerdict;
+  confidence: number;
+  rationale: string;
+  signals?: { apiAreas?: string[]; blockers?: string[] } | null;
+  analyzedAt: string;
+}
+
 // ---------- Main view -----------------------------------------------------
 
 interface TaskLabViewProps {
@@ -135,6 +151,16 @@ export function TaskLabView({
   const [tasksLoading, setTasksLoading] = useState(false);
   const [tasksError, setTasksError] = useState("");
 
+  const [feasibility, setFeasibility] = useState<Map<string, FeasibilityRow>>(
+    new Map()
+  );
+  const [feasibilityBusy, setFeasibilityBusy] = useState<
+    "all" | "missing" | null
+  >(null);
+  const [feasibilityFilter, setFeasibilityFilter] = useState<
+    "ALL" | FeasibilityVerdict | "UNANALYZED"
+  >("ALL");
+
   const [activeTask, setActiveTask] = useState<ClickUpTask | null>(null);
   const [execution, setExecution] = useState<ExecutionState | null>(null);
   const [executionBusy, setExecutionBusy] = useState<
@@ -142,6 +168,18 @@ export function TaskLabView({
   >(null);
   const [executionError, setExecutionError] = useState("");
   const [confirmedSteps, setConfirmedSteps] = useState<Set<number>>(new Set());
+  const [topError, setTopError] = useState("");
+  const executionPanelRef = useRef<HTMLDivElement | null>(null);
+
+  // Scroll execution panel into view whenever a new task is selected
+  useEffect(() => {
+    if (activeTask && executionPanelRef.current) {
+      executionPanelRef.current.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    }
+  }, [activeTask]);
 
   const refreshConnections = useCallback(async () => {
     const res = await fetch("/api/task-lab/connections");
@@ -181,6 +219,53 @@ export function TaskLabView({
     else setTasks([]);
   }, [activeConnectionId, loadTasks]);
 
+  const loadFeasibility = useCallback(async () => {
+    if (!activeConnectionId) {
+      setFeasibility(new Map());
+      return;
+    }
+    try {
+      const res = await fetch(
+        `/api/task-lab/connections/${activeConnectionId}/feasibility`
+      );
+      if (!res.ok) return;
+      const data = await res.json();
+      const map = new Map<string, FeasibilityRow>();
+      for (const r of data.feasibility || []) map.set(r.clickupTaskId, r);
+      setFeasibility(map);
+    } catch {
+      // ignore
+    }
+  }, [activeConnectionId]);
+
+  useEffect(() => {
+    loadFeasibility();
+  }, [loadFeasibility]);
+
+  async function runFeasibility(missingOnly: boolean) {
+    if (!activeConnectionId) return;
+    setFeasibilityBusy(missingOnly ? "missing" : "all");
+    setTopError("");
+    try {
+      const url = `/api/task-lab/connections/${activeConnectionId}/feasibility${
+        missingOnly ? "?missingOnly=true" : ""
+      }`;
+      const res = await fetch(url, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        setTopError(data.error || "Feasibility analysis failed");
+      } else {
+        const map = new Map<string, FeasibilityRow>();
+        for (const r of data.feasibility || []) map.set(r.clickupTaskId, r);
+        setFeasibility(map);
+      }
+    } catch (err: any) {
+      setTopError(err?.message || "Feasibility analysis failed");
+    } finally {
+      setFeasibilityBusy(null);
+    }
+  }
+
   const activePortal = useMemo(
     () => portals.find((p) => p.id === activePortalId) || null,
     [portals, activePortalId]
@@ -189,10 +274,18 @@ export function TaskLabView({
   // ----- Plan / Run actions
 
   async function handlePlan(task: ClickUpTask) {
-    if (!activeConnectionId || !activePortalId) {
-      setExecutionError("Pick a HubSpot portal first.");
+    setTopError("");
+    if (!activeConnectionId) {
+      setTopError("No ClickUp connection selected.");
       return;
     }
+    if (!activePortalId) {
+      setTopError(
+        "Pick a HubSpot portal in the Tasks card before planning a task."
+      );
+      return;
+    }
+    // Show panel + loading state IMMEDIATELY so the user sees something happen
     setActiveTask(task);
     setExecution(null);
     setExecutionError("");
@@ -210,7 +303,7 @@ export function TaskLabView({
       });
       const data = await res.json();
       if (!res.ok) {
-        setExecutionError(data.error || "Planning failed");
+        setExecutionError(data.error || `Planning failed (HTTP ${res.status})`);
       } else {
         setExecution({
           executionId: data.executionId,
@@ -221,7 +314,7 @@ export function TaskLabView({
         });
       }
     } catch (err: any) {
-      setExecutionError(err?.message || "Planning failed");
+      setExecutionError(err?.message || "Planning failed (network error)");
     } finally {
       setExecutionBusy(null);
     }
@@ -273,6 +366,22 @@ export function TaskLabView({
   // ---------------------------------------------------------------------
   return (
     <div className="space-y-6">
+      {topError && (
+        <div className="rounded-lg bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 px-4 py-3 text-sm text-amber-900 dark:text-amber-100 flex items-start justify-between gap-3">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+            <span>{topError}</span>
+          </div>
+          <button
+            type="button"
+            className="text-xs text-amber-700 dark:text-amber-300 hover:underline"
+            onClick={() => setTopError("")}
+          >
+            dismiss
+          </button>
+        </div>
+      )}
+
       <ConnectionsCard
         connections={connections}
         activeConnectionId={activeConnectionId}
@@ -290,12 +399,40 @@ export function TaskLabView({
                 : "Pick a ClickUp connection above to load tasks."}
             </CardDescription>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap justify-end">
             <PortalPicker
               portals={portals}
               value={activePortalId}
               onChange={setActivePortalId}
             />
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => runFeasibility(true)}
+              disabled={!activeConnectionId || feasibilityBusy !== null}
+              title="Analyze tasks Rex hasn't seen yet"
+            >
+              {feasibilityBusy === "missing" ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Brain className="mr-2 h-4 w-4" />
+              )}
+              Analyze new
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => runFeasibility(false)}
+              disabled={!activeConnectionId || feasibilityBusy !== null}
+              title="Re-analyze every task with AI"
+            >
+              {feasibilityBusy === "all" ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Brain className="mr-2 h-4 w-4" />
+              )}
+              Re-analyze all
+            </Button>
             <Button
               variant="outline"
               size="sm"
@@ -319,6 +456,15 @@ export function TaskLabView({
               {tasksError}
             </div>
           )}
+
+          {feasibility.size > 0 && (
+            <FeasibilityFilterBar
+              filter={feasibilityFilter}
+              onChange={setFeasibilityFilter}
+              counts={summarizeFeasibility(tasks, feasibility)}
+            />
+          )}
+
           {!activeConnectionId ? (
             <p className="text-sm text-muted-foreground py-8 text-center">
               No ClickUp connection selected.
@@ -339,27 +485,31 @@ export function TaskLabView({
               hasPortal={!!activePortalId}
               onPlan={handlePlan}
               onChanged={loadTasks}
+              feasibility={feasibility}
+              feasibilityFilter={feasibilityFilter}
             />
           )}
         </CardContent>
       </Card>
 
-      <ExecutionPanel
-        task={activeTask}
-        portal={activePortal}
-        execution={execution}
-        busy={executionBusy}
-        error={executionError}
-        confirmedSteps={confirmedSteps}
-        onToggleConfirm={toggleConfirm}
-        onRun={handleRun}
-        onClose={() => {
-          setActiveTask(null);
-          setExecution(null);
-          setExecutionError("");
-          setConfirmedSteps(new Set());
-        }}
-      />
+      <div ref={executionPanelRef}>
+        <ExecutionPanel
+          task={activeTask}
+          portal={activePortal}
+          execution={execution}
+          busy={executionBusy}
+          error={executionError}
+          confirmedSteps={confirmedSteps}
+          onToggleConfirm={toggleConfirm}
+          onRun={handleRun}
+          onClose={() => {
+            setActiveTask(null);
+            setExecution(null);
+            setExecutionError("");
+            setConfirmedSteps(new Set());
+          }}
+        />
+      </div>
     </div>
   );
 }
@@ -714,6 +864,8 @@ function TaskTable({
   hasPortal,
   onPlan,
   onChanged,
+  feasibility,
+  feasibilityFilter,
 }: {
   tasks: ClickUpTask[];
   connectionId: string;
@@ -721,8 +873,39 @@ function TaskTable({
   hasPortal: boolean;
   onPlan: (task: ClickUpTask) => void;
   onChanged: () => void;
+  feasibility: Map<string, FeasibilityRow>;
+  feasibilityFilter: "ALL" | FeasibilityVerdict | "UNANALYZED";
 }) {
-  const { roots, childrenOf } = useMemo(() => buildTaskTree(tasks), [tasks]);
+  // Apply filter, but always keep ancestors of matching tasks so the tree
+  // structure stays intact.
+  const filteredTasks = useMemo(() => {
+    if (feasibilityFilter === "ALL") return tasks;
+    const byId = new Map(tasks.map((t) => [t.id, t]));
+    const matchIds = new Set<string>();
+    for (const t of tasks) {
+      const f = feasibility.get(t.id);
+      const matches =
+        feasibilityFilter === "UNANALYZED" ? !f : f?.verdict === feasibilityFilter;
+      if (matches) matchIds.add(t.id);
+    }
+    // Walk up parents
+    const keep = new Set<string>(matchIds);
+    for (const id of matchIds) {
+      let cur = byId.get(id);
+      while (cur?.parent) {
+        const parent = byId.get(cur.parent);
+        if (!parent || keep.has(parent.id)) break;
+        keep.add(parent.id);
+        cur = parent;
+      }
+    }
+    return tasks.filter((t) => keep.has(t.id));
+  }, [tasks, feasibility, feasibilityFilter]);
+
+  const { roots, childrenOf } = useMemo(
+    () => buildTaskTree(filteredTasks),
+    [filteredTasks]
+  );
 
   // Default: every parent expanded
   const [expanded, setExpanded] = useState<Set<string>>(() => {
@@ -789,6 +972,7 @@ function TaskTable({
           <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
             <tr>
               <th className="px-3 py-2 font-medium">Task</th>
+              <th className="px-3 py-2 font-medium">AI Verdict</th>
               <th className="px-3 py-2 font-medium">Status</th>
               <th className="px-3 py-2 font-medium">Priority</th>
               <th className="px-3 py-2 font-medium">Due</th>
@@ -809,6 +993,7 @@ function TaskTable({
                 hasPortal={hasPortal}
                 onPlan={onPlan}
                 onChanged={onChanged}
+                feasibility={feasibility}
               />
             ))}
           </tbody>
@@ -829,6 +1014,7 @@ function TaskRowGroup({
   hasPortal,
   onPlan,
   onChanged,
+  feasibility,
 }: {
   task: ClickUpTask;
   depth: number;
@@ -840,10 +1026,12 @@ function TaskRowGroup({
   hasPortal: boolean;
   onPlan: (task: ClickUpTask) => void;
   onChanged: () => void;
+  feasibility: Map<string, FeasibilityRow>;
 }) {
   const children = childrenOf.get(task.id) || [];
   const hasChildren = children.length > 0;
   const isOpen = expanded.has(task.id);
+  const verdict = feasibility.get(task.id);
 
   return (
     <>
@@ -888,6 +1076,9 @@ function TaskRowGroup({
               )}
             </div>
           </div>
+        </td>
+        <td className="px-3 py-2">
+          <FeasibilityBadge verdict={verdict} />
         </td>
         <td className="px-3 py-2">
           {task.status?.status ? (
@@ -965,9 +1156,151 @@ function TaskRowGroup({
             hasPortal={hasPortal}
             onPlan={onPlan}
             onChanged={onChanged}
+            feasibility={feasibility}
           />
         ))}
     </>
+  );
+}
+
+// ---------- Feasibility helpers ------------------------------------------
+
+function summarizeFeasibility(
+  tasks: ClickUpTask[],
+  feasibility: Map<string, FeasibilityRow>
+) {
+  let automatable = 0;
+  let partial = 0;
+  let human = 0;
+  let unclear = 0;
+  let unanalyzed = 0;
+  for (const t of tasks) {
+    const f = feasibility.get(t.id);
+    if (!f) {
+      unanalyzed++;
+      continue;
+    }
+    if (f.verdict === "AUTOMATABLE") automatable++;
+    else if (f.verdict === "PARTIAL") partial++;
+    else if (f.verdict === "HUMAN") human++;
+    else unclear++;
+  }
+  return {
+    ALL: tasks.length,
+    AUTOMATABLE: automatable,
+    PARTIAL: partial,
+    HUMAN: human,
+    UNCLEAR: unclear,
+    UNANALYZED: unanalyzed,
+  };
+}
+
+function FeasibilityFilterBar({
+  filter,
+  onChange,
+  counts,
+}: {
+  filter: "ALL" | FeasibilityVerdict | "UNANALYZED";
+  onChange: (v: "ALL" | FeasibilityVerdict | "UNANALYZED") => void;
+  counts: Record<string, number>;
+}) {
+  const pills: { id: typeof filter; label: string; cls: string }[] = [
+    {
+      id: "ALL",
+      label: `All ${counts.ALL}`,
+      cls: "bg-muted text-foreground hover:bg-muted/80",
+    },
+    {
+      id: "AUTOMATABLE",
+      label: `Automatable ${counts.AUTOMATABLE}`,
+      cls: "bg-emerald-100 text-emerald-900 hover:bg-emerald-200 dark:bg-emerald-950 dark:text-emerald-100",
+    },
+    {
+      id: "PARTIAL",
+      label: `Partial ${counts.PARTIAL}`,
+      cls: "bg-amber-100 text-amber-900 hover:bg-amber-200 dark:bg-amber-950 dark:text-amber-100",
+    },
+    {
+      id: "HUMAN",
+      label: `Human ${counts.HUMAN}`,
+      cls: "bg-rose-100 text-rose-900 hover:bg-rose-200 dark:bg-rose-950 dark:text-rose-100",
+    },
+    {
+      id: "UNCLEAR",
+      label: `Unclear ${counts.UNCLEAR}`,
+      cls: "bg-slate-100 text-slate-900 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-100",
+    },
+    {
+      id: "UNANALYZED",
+      label: `Unanalyzed ${counts.UNANALYZED}`,
+      cls: "bg-muted text-muted-foreground hover:bg-muted/80",
+    },
+  ];
+  return (
+    <div className="flex flex-wrap items-center gap-2 mb-4">
+      {pills.map((p) => (
+        <button
+          key={p.id}
+          type="button"
+          onClick={() => onChange(p.id)}
+          className={`text-xs rounded-full px-3 py-1 border transition ${
+            filter === p.id
+              ? "ring-2 ring-primary border-primary"
+              : "border-transparent"
+          } ${p.cls}`}
+        >
+          {p.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function FeasibilityBadge({ verdict }: { verdict: FeasibilityRow | undefined }) {
+  if (!verdict) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+        <HelpCircle className="h-3 w-3" />
+        Unanalyzed
+      </span>
+    );
+  }
+  const cfg: Record<
+    FeasibilityVerdict,
+    { label: string; cls: string; icon: any }
+  > = {
+    AUTOMATABLE: {
+      label: "Automatable",
+      cls: "bg-emerald-100 text-emerald-900 border-emerald-300 dark:bg-emerald-950 dark:text-emerald-100 dark:border-emerald-800",
+      icon: Bot,
+    },
+    PARTIAL: {
+      label: "Partial",
+      cls: "bg-amber-100 text-amber-900 border-amber-300 dark:bg-amber-950 dark:text-amber-100 dark:border-amber-800",
+      icon: AlertTriangle,
+    },
+    HUMAN: {
+      label: "Human",
+      cls: "bg-rose-100 text-rose-900 border-rose-300 dark:bg-rose-950 dark:text-rose-100 dark:border-rose-800",
+      icon: HandMetal,
+    },
+    UNCLEAR: {
+      label: "Unclear",
+      cls: "bg-slate-100 text-slate-900 border-slate-300 dark:bg-slate-800 dark:text-slate-100 dark:border-slate-700",
+      icon: HelpCircle,
+    },
+  };
+  const c = cfg[verdict.verdict];
+  const Icon = c.icon;
+  return (
+    <span
+      className={`inline-flex items-center gap-1 text-xs rounded-full border px-2 py-0.5 ${c.cls}`}
+      title={`${verdict.confidence}% confidence — ${verdict.rationale}`}
+    >
+      <Icon className="h-3 w-3" />
+      {c.label}
+      <span className="opacity-60">{verdict.confidence}%</span>
+    </span>
   );
 }
 

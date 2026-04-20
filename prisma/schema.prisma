@@ -464,15 +464,39 @@ model HubSpotPortal {
 // ============================================================
 
 model ClickUpConnection {
-  id          String           @id @default(cuid())
-  name        String
-  apiToken    String           // encrypted via aes-256-gcm
-  listId      String
-  isActive    Boolean          @default(true)
-  lastSyncAt  DateTime?
-  createdAt   DateTime         @default(now())
-  updatedAt   DateTime         @updatedAt
-  executions  TaskExecution[]
+  id            String              @id @default(cuid())
+  name          String
+  apiToken      String              // encrypted via aes-256-gcm
+  listId        String
+  isActive      Boolean             @default(true)
+  lastSyncAt    DateTime?
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+  executions    TaskExecution[]
+  feasibilities TaskFeasibility[]
+}
+
+model TaskFeasibility {
+  id            String              @id @default(cuid())
+  connectionId  String
+  connection    ClickUpConnection   @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  clickupTaskId String
+  taskName      String
+  verdict       FeasibilityVerdict
+  confidence    Int                 // 0-100
+  rationale     String              @db.Text
+  signals       Json?               // optional structured signals (api_areas, blockers, etc.)
+  analyzedAt    DateTime            @default(now())
+
+  @@unique([connectionId, clickupTaskId])
+  @@index([verdict])
+}
+
+enum FeasibilityVerdict {
+  AUTOMATABLE   // Rex can fully execute via HubSpot APIs
+  PARTIAL       // Some steps automatable, others need humans
+  HUMAN         // Requires human work (training, dashboard design, sign-offs, etc.)
+  UNCLEAR       // Description too vague to classify
 }
 
 model TaskExecution {
