@@ -35,6 +35,8 @@ export interface StepResult {
   status: "ok" | "error" | "skipped" | "blocked" | "dry";
   response?: unknown;
   errorMessage?: string;
+  /** Human-readable notes about server-side auto-fixes applied to the step body */
+  autoFixes?: string[];
 }
 
 // ---------- Guardrails ---------------------------------------------------
@@ -136,10 +138,63 @@ GUARDRAILS — DO NOT VIOLATE:
 - If the task is ambiguous or requires destructive actions you cannot confidently
   scope, return an empty steps array and explain in "risks".
 - If the task asks for something not achievable via the HubSpot REST API
-  (e.g. "train a sales team", "design a workflow diagram"), return empty steps
-  and put the human-action items in "assumptions".
+  (e.g. "train a sales team", "design a workflow diagram", "build a dashboard"),
+  return empty steps and put the human-action items in "assumptions".
 - Prefer GET / discovery steps first if the plan needs to inspect existing state.
 - Keep plans short. 1-10 steps. Audit-style tasks should be mostly GETs.
+
+HUBSPOT API CONVENTIONS — these are the most common mistakes; do not make them:
+
+• CREATE PROPERTY  POST /crm/v3/properties/{objectType}
+  REQUIRED body fields:
+    - name (string, internal name, lowercase_snake_case, no spaces)
+    - label (string, human-readable)
+    - type (string) — one of: string, number, date, datetime, enumeration, bool, phone_number
+    - fieldType (string) — one of: text, textarea, number, date, select, radio, checkbox, booleancheckbox, phonenumber, calculation_equation
+    - groupName (string) — REQUIRED. For standard objects use:
+        contacts → "contactinformation"
+        companies → "companyinformation"
+        deals → "dealinformation"
+        tickets → "ticketinformation"
+        products → "productinformation"
+        line_items → "lineiteminformation"
+      For custom objects you must look up an existing group via
+      GET /crm/v3/properties/{objectType}/groups first.
+  For enumeration type, also include "options": [{ "label": "...", "value": "...", "displayOrder": 0 }]
+  Example body for a Contact lifecycle stage helper:
+    {
+      "name": "smb_segment",
+      "label": "SMB Segment",
+      "type": "enumeration",
+      "fieldType": "select",
+      "groupName": "contactinformation",
+      "options": [
+        { "label": "Tier 1", "value": "tier_1", "displayOrder": 0 },
+        { "label": "Tier 2", "value": "tier_2", "displayOrder": 1 }
+      ]
+    }
+
+• CREATE PIPELINE  POST /crm/v3/pipelines/{objectType}
+  REQUIRED body: { "label": "...", "displayOrder": 0, "stages": [ ... ] }
+  Each stage REQUIRES: { "label": "...", "displayOrder": 0, "metadata": { "probability": "0.5", "isClosed": "false" } }
+  metadata.probability MUST be a string between "0.0" and "1.0".
+
+• CREATE LIST  POST /crm/v3/lists
+  REQUIRED body: { "name": "...", "objectTypeId": "0-1" (contacts) | "0-2" (companies) | "0-3" (deals), "processingType": "MANUAL" | "DYNAMIC", "filterBranch": ... (only for DYNAMIC) }
+
+• CREATE/UPDATE OBJECT  POST /crm/v3/objects/{objectType}
+  Body: { "properties": { "field": "value", ... }, "associations": [...] (optional) }
+  Properties must be the INTERNAL property names (snake_case), not labels.
+
+• ASSOCIATIONS  use the v4 endpoints when possible:
+  PUT /crm/v4/objects/{fromType}/{fromId}/associations/default/{toType}/{toId}
+  (default associations don't require a labelId)
+
+• Use objectType plural names in URLs: contacts, companies, deals, tickets, products, line_items.
+  Custom object URLs use either the object type ID (e.g. "2-12345") or the internal name.
+
+• DO NOT invent property internal names. If the task references existing properties,
+  add a discovery GET to /crm/v3/properties/{objectType} first to verify.
 
 Return ONLY the JSON. No prose, no markdown fences, no commentary.`;
 
@@ -228,6 +283,90 @@ export interface ExecuteOptions {
   confirmedSteps?: number[];
 }
 
+/**
+ * Standard "information" property groups that ship with every HubSpot
+ * portal for the built-in objects. We use these as a safe fallback when
+ * the planner forgets to set groupName on a CREATE PROPERTY step.
+ */
+const DEFAULT_GROUP_BY_OBJECT: Record<string, string> = {
+  contacts: "contactinformation",
+  companies: "companyinformation",
+  deals: "dealinformation",
+  tickets: "ticketinformation",
+  products: "productinformation",
+  line_items: "lineiteminformation",
+  quotes: "quoteinformation",
+};
+
+/**
+ * Inspect the planned step and patch in HubSpot fields the model
+ * commonly forgets. Returns the (possibly mutated) step plus a list
+ * of human-readable notes so the result UI can show what was patched.
+ */
+function autoFixStep(step: PlannedStep): {
+  step: PlannedStep;
+  notes: string[];
+} {
+  const notes: string[] = [];
+  const path = step.path;
+  const method = step.method.toUpperCase() as HubSpotMethod;
+
+  // POST /crm/v3/properties/{objectType}  → ensure groupName
+  const propMatch = path.match(/^\/crm\/v3\/properties\/([^/]+)\/?$/);
+  if (method === "POST" && propMatch) {
+    const objectType = propMatch[1];
+    const body =
+      step.body && typeof step.body === "object"
+        ? ({ ...(step.body as Record<string, unknown>) } as Record<
+            string,
+            unknown
+          >)
+        : ({} as Record<string, unknown>);
+
+    if (!body.groupName || typeof body.groupName !== "string") {
+      const fallback = DEFAULT_GROUP_BY_OBJECT[objectType];
+      if (fallback) {
+        body.groupName = fallback;
+        notes.push(
+          `auto-filled groupName="${fallback}" (planner omitted it)`
+        );
+      }
+    }
+
+    // type/fieldType pairing: if only one is present, infer the other
+    if (body.type === "enumeration" && !body.fieldType) {
+      body.fieldType = "select";
+      notes.push(`auto-filled fieldType="select" for enumeration property`);
+    }
+    if (body.type === "string" && !body.fieldType) {
+      body.fieldType = "text";
+      notes.push(`auto-filled fieldType="text" for string property`);
+    }
+    if (body.type === "number" && !body.fieldType) {
+      body.fieldType = "number";
+      notes.push(`auto-filled fieldType="number" for number property`);
+    }
+    if (body.type === "bool" && !body.fieldType) {
+      body.fieldType = "booleancheckbox";
+      notes.push(
+        `auto-filled fieldType="booleancheckbox" for bool property`
+      );
+    }
+    if (body.type === "date" && !body.fieldType) {
+      body.fieldType = "date";
+      notes.push(`auto-filled fieldType="date" for date property`);
+    }
+    if (body.type === "datetime" && !body.fieldType) {
+      body.fieldType = "date";
+      notes.push(`auto-filled fieldType="date" for datetime property`);
+    }
+
+    return { step: { ...step, body }, notes };
+  }
+
+  return { step, notes };
+}
+
 export async function executePlan(
   opts: ExecuteOptions
 ): Promise<StepResult[]> {
@@ -235,7 +374,9 @@ export async function executePlan(
   const confirmed = new Set(opts.confirmedSteps ?? []);
 
   for (let i = 0; i < opts.plan.steps.length; i++) {
-    const step = opts.plan.steps[i];
+    const rawStep = opts.plan.steps[i];
+    const { step, notes: autoFixes } = autoFixStep(rawStep);
+
     const validation = validateStep(step);
     if (!validation.ok) {
       results.push({
@@ -245,6 +386,7 @@ export async function executePlan(
         path: step.path,
         status: "blocked",
         errorMessage: validation.reason,
+        autoFixes: autoFixes.length ? autoFixes : undefined,
       });
       continue;
     }
@@ -257,6 +399,7 @@ export async function executePlan(
         path: step.path,
         status: "skipped",
         errorMessage: "Step requires explicit confirmation",
+        autoFixes: autoFixes.length ? autoFixes : undefined,
       });
       continue;
     }
@@ -272,6 +415,7 @@ export async function executePlan(
           dryRun: true,
           wouldSend: { method: step.method, path: step.path, body: step.body },
         },
+        autoFixes: autoFixes.length ? autoFixes : undefined,
       });
       continue;
     }
@@ -290,6 +434,7 @@ export async function executePlan(
         path: step.path,
         status: "ok",
         response,
+        autoFixes: autoFixes.length ? autoFixes : undefined,
       });
     } catch (err: any) {
       results.push({
@@ -300,6 +445,7 @@ export async function executePlan(
         status: "error",
         errorMessage: err?.message || "Request failed",
         response: err?.hubspotError,
+        autoFixes: autoFixes.length ? autoFixes : undefined,
       });
     }
   }

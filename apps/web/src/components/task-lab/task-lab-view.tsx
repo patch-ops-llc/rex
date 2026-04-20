@@ -105,6 +105,7 @@ interface StepResult {
   status: "ok" | "error" | "skipped" | "blocked" | "dry";
   response?: any;
   errorMessage?: string;
+  autoFixes?: string[];
 }
 
 interface ExecutionState {
@@ -1950,6 +1951,16 @@ function ExecutionPanel({
                               {JSON.stringify(step.body, null, 2)}
                             </pre>
                           </details>
+                        )}
+                        {result?.autoFixes && result.autoFixes.length > 0 && (
+                          <div className="mt-2 rounded-md bg-sky-50 dark:bg-sky-950 px-3 py-2 text-xs text-sky-900 dark:text-sky-100 space-y-0.5">
+                            <div className="font-medium">
+                              Server auto-fixes applied:
+                            </div>
+                            {result.autoFixes.map((note, j) => (
+                              <div key={j}>• {note}</div>
+                            ))}
+                          </div>
                         )}
                         {result && (result.response || result.errorMessage) && (
                           <details className="mt-2" open={result.status === "error"}>
