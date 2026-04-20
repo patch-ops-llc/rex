@@ -43,6 +43,10 @@ import {
   XCircle,
   AlertTriangle,
   ShieldAlert,
+  ChevronRight,
+  ChevronDown,
+  ChevronsDownUp,
+  ChevronsUpDown,
 } from "lucide-react";
 
 // ---------- Types ---------------------------------------------------------
@@ -671,6 +675,38 @@ function AddTaskDialog({
   );
 }
 
+// Build a parent->children map. Top-level tasks are anything with no parent
+// or a parent that isn't present in the loaded list.
+function buildTaskTree(tasks: ClickUpTask[]): {
+  roots: ClickUpTask[];
+  childrenOf: Map<string, ClickUpTask[]>;
+} {
+  const byId = new Map<string, ClickUpTask>();
+  for (const t of tasks) byId.set(t.id, t);
+
+  const childrenOf = new Map<string, ClickUpTask[]>();
+  const roots: ClickUpTask[] = [];
+
+  for (const t of tasks) {
+    if (t.parent && byId.has(t.parent)) {
+      const arr = childrenOf.get(t.parent) || [];
+      arr.push(t);
+      childrenOf.set(t.parent, arr);
+    } else {
+      roots.push(t);
+    }
+  }
+
+  // Stable sort by name within each level (ClickUp returns somewhat random
+  // order; this groups TASK-1, TASK-2, ... predictably under their WS parent).
+  const sortFn = (a: ClickUpTask, b: ClickUpTask) =>
+    a.name.localeCompare(b.name, undefined, { numeric: true });
+  roots.sort(sortFn);
+  for (const arr of childrenOf.values()) arr.sort(sortFn);
+
+  return { roots, childrenOf };
+}
+
 function TaskTable({
   tasks,
   connectionId,
@@ -686,100 +722,252 @@ function TaskTable({
   onPlan: (task: ClickUpTask) => void;
   onChanged: () => void;
 }) {
+  const { roots, childrenOf } = useMemo(() => buildTaskTree(tasks), [tasks]);
+
+  // Default: every parent expanded
+  const [expanded, setExpanded] = useState<Set<string>>(() => {
+    const ids = new Set<string>();
+    for (const r of roots) if (childrenOf.has(r.id)) ids.add(r.id);
+    return ids;
+  });
+
+  // When the loaded task set changes (reload), make sure newly-loaded parents
+  // also start expanded by default. (Don't collapse anything the user expanded.)
+  useEffect(() => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      for (const r of roots) if (childrenOf.has(r.id)) next.add(r.id);
+      return next;
+    });
+  }, [roots, childrenOf]);
+
+  const toggle = (id: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const expandAll = () => {
+    const ids = new Set<string>();
+    for (const id of childrenOf.keys()) ids.add(id);
+    setExpanded(ids);
+  };
+  const collapseAll = () => setExpanded(new Set());
+
+  const totalParents = childrenOf.size;
+  const allExpanded =
+    totalParents > 0 &&
+    Array.from(childrenOf.keys()).every((id) => expanded.has(id));
+
   return (
-    <div className="overflow-x-auto rounded-lg border">
-      <table className="w-full text-sm">
-        <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
-          <tr>
-            <th className="px-3 py-2 font-medium">Task</th>
-            <th className="px-3 py-2 font-medium">Status</th>
-            <th className="px-3 py-2 font-medium">Priority</th>
-            <th className="px-3 py-2 font-medium">Due</th>
-            <th className="px-3 py-2 font-medium text-right">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {tasks.map((t) => (
-            <tr
-              key={t.id}
-              className={`border-t ${
-                t.id === activeTaskId ? "bg-primary/5" : ""
-              }`}
-            >
-              <td className="px-3 py-2">
-                <div className="font-medium">{t.name}</div>
-                {t.parent && (
-                  <div className="text-xs text-muted-foreground">
-                    subtask of {t.parent}
-                  </div>
-                )}
-              </td>
-              <td className="px-3 py-2">
-                {t.status?.status ? (
-                  <Badge variant="secondary">{t.status.status}</Badge>
-                ) : (
-                  <span className="text-muted-foreground">—</span>
-                )}
-              </td>
-              <td className="px-3 py-2">
-                {t.priority?.priority || (
-                  <span className="text-muted-foreground">—</span>
-                )}
-              </td>
-              <td className="px-3 py-2 text-xs text-muted-foreground">
-                {t.due_date
-                  ? new Date(parseInt(t.due_date, 10)).toLocaleDateString()
-                  : "—"}
-              </td>
-              <td className="px-3 py-2 text-right">
-                <div className="flex justify-end gap-1">
-                  {t.url && (
-                    <a
-                      href={t.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-accent"
-                      title="Open in ClickUp"
-                    >
-                      <ExternalLink className="h-3.5 w-3.5" />
-                    </a>
-                  )}
-                  <Button
-                    size="sm"
-                    variant="default"
-                    onClick={() => onPlan(t)}
-                    disabled={!hasPortal}
-                    title={
-                      hasPortal
-                        ? "Generate AI execution plan"
-                        : "Pick a HubSpot portal first"
-                    }
-                  >
-                    <Sparkles className="mr-1 h-3.5 w-3.5" />
-                    Plan
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={async () => {
-                      if (!confirm(`Archive "${t.name}"?`)) return;
-                      await fetch(
-                        `/api/task-lab/connections/${connectionId}/tasks/${t.id}`,
-                        { method: "DELETE" }
-                      );
-                      onChanged();
-                    }}
-                    title="Archive task"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              </td>
+    <div className="space-y-2">
+      {totalParents > 0 && (
+        <div className="flex items-center justify-end gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={allExpanded ? collapseAll : expandAll}
+          >
+            {allExpanded ? (
+              <>
+                <ChevronsDownUp className="mr-1.5 h-3.5 w-3.5" />
+                Collapse all
+              </>
+            ) : (
+              <>
+                <ChevronsUpDown className="mr-1.5 h-3.5 w-3.5" />
+                Expand all
+              </>
+            )}
+          </Button>
+        </div>
+      )}
+      <div className="overflow-x-auto rounded-lg border">
+        <table className="w-full text-sm">
+          <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
+            <tr>
+              <th className="px-3 py-2 font-medium">Task</th>
+              <th className="px-3 py-2 font-medium">Status</th>
+              <th className="px-3 py-2 font-medium">Priority</th>
+              <th className="px-3 py-2 font-medium">Due</th>
+              <th className="px-3 py-2 font-medium text-right">Actions</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {roots.map((root) => (
+              <TaskRowGroup
+                key={root.id}
+                task={root}
+                depth={0}
+                childrenOf={childrenOf}
+                expanded={expanded}
+                onToggle={toggle}
+                connectionId={connectionId}
+                activeTaskId={activeTaskId}
+                hasPortal={hasPortal}
+                onPlan={onPlan}
+                onChanged={onChanged}
+              />
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
+  );
+}
+
+function TaskRowGroup({
+  task,
+  depth,
+  childrenOf,
+  expanded,
+  onToggle,
+  connectionId,
+  activeTaskId,
+  hasPortal,
+  onPlan,
+  onChanged,
+}: {
+  task: ClickUpTask;
+  depth: number;
+  childrenOf: Map<string, ClickUpTask[]>;
+  expanded: Set<string>;
+  onToggle: (id: string) => void;
+  connectionId: string;
+  activeTaskId: string | null;
+  hasPortal: boolean;
+  onPlan: (task: ClickUpTask) => void;
+  onChanged: () => void;
+}) {
+  const children = childrenOf.get(task.id) || [];
+  const hasChildren = children.length > 0;
+  const isOpen = expanded.has(task.id);
+
+  return (
+    <>
+      <tr
+        className={`border-t ${
+          task.id === activeTaskId ? "bg-primary/5" : ""
+        } ${depth === 0 && hasChildren ? "bg-muted/20" : ""}`}
+      >
+        <td className="px-3 py-2">
+          <div
+            className="flex items-start gap-1"
+            style={{ paddingLeft: `${depth * 20}px` }}
+          >
+            {hasChildren ? (
+              <button
+                type="button"
+                onClick={() => onToggle(task.id)}
+                className="mt-0.5 inline-flex h-5 w-5 items-center justify-center rounded hover:bg-accent text-muted-foreground"
+                aria-label={isOpen ? "Collapse" : "Expand"}
+              >
+                {isOpen ? (
+                  <ChevronDown className="h-3.5 w-3.5" />
+                ) : (
+                  <ChevronRight className="h-3.5 w-3.5" />
+                )}
+              </button>
+            ) : (
+              <span className="inline-block h-5 w-5" />
+            )}
+            <div className="min-w-0">
+              <div
+                className={`truncate ${
+                  depth === 0 ? "font-semibold" : "font-medium"
+                }`}
+              >
+                {task.name}
+              </div>
+              {hasChildren && (
+                <div className="text-xs text-muted-foreground">
+                  {children.length} subtask{children.length === 1 ? "" : "s"}
+                </div>
+              )}
+            </div>
+          </div>
+        </td>
+        <td className="px-3 py-2">
+          {task.status?.status ? (
+            <Badge variant="secondary">{task.status.status}</Badge>
+          ) : (
+            <span className="text-muted-foreground">—</span>
+          )}
+        </td>
+        <td className="px-3 py-2">
+          {task.priority?.priority || (
+            <span className="text-muted-foreground">—</span>
+          )}
+        </td>
+        <td className="px-3 py-2 text-xs text-muted-foreground">
+          {task.due_date
+            ? new Date(parseInt(task.due_date, 10)).toLocaleDateString()
+            : "—"}
+        </td>
+        <td className="px-3 py-2 text-right">
+          <div className="flex justify-end gap-1">
+            {task.url && (
+              <a
+                href={task.url}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-accent"
+                title="Open in ClickUp"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+              </a>
+            )}
+            <Button
+              size="sm"
+              variant="default"
+              onClick={() => onPlan(task)}
+              disabled={!hasPortal}
+              title={
+                hasPortal
+                  ? "Generate AI execution plan"
+                  : "Pick a HubSpot portal first"
+              }
+            >
+              <Sparkles className="mr-1 h-3.5 w-3.5" />
+              Plan
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={async () => {
+                if (!confirm(`Archive "${task.name}"?`)) return;
+                await fetch(
+                  `/api/task-lab/connections/${connectionId}/tasks/${task.id}`,
+                  { method: "DELETE" }
+                );
+                onChanged();
+              }}
+              title="Archive task"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        </td>
+      </tr>
+      {isOpen &&
+        children.map((child) => (
+          <TaskRowGroup
+            key={child.id}
+            task={child}
+            depth={depth + 1}
+            childrenOf={childrenOf}
+            expanded={expanded}
+            onToggle={onToggle}
+            connectionId={connectionId}
+            activeTaskId={activeTaskId}
+            hasPortal={hasPortal}
+            onPlan={onPlan}
+            onChanged={onChanged}
+          />
+        ))}
+    </>
   );
 }
 
