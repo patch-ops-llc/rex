@@ -365,6 +365,8 @@ export interface PropertyGroupDefinition {
   label: string;
   objectType: string;
   displayOrder?: number;
+  reviewStatus?: "APPROVED" | "REJECTED";
+  reviewReason?: string;
 }
 
 export interface PropertyDefinition {
@@ -378,6 +380,8 @@ export interface PropertyDefinition {
   options?: Array<{ label: string; value: string; displayOrder?: number }>;
   hasUniqueValue?: boolean;
   formField?: boolean;
+  reviewStatus?: "APPROVED" | "REJECTED";
+  reviewReason?: string;
 }
 
 export interface CustomObjectDefinition {
@@ -386,6 +390,8 @@ export interface CustomObjectDefinition {
   primaryDisplayProperty: string;
   properties: PropertyDefinition[];
   associations: AssociationDefinition[];
+  reviewStatus?: "APPROVED" | "REJECTED";
+  reviewReason?: string;
 }
 
 export interface AssociationDefinition {
@@ -394,6 +400,8 @@ export interface AssociationDefinition {
   name: string;
   label?: string;
   associationCategory: "USER_DEFINED" | "HUBSPOT_DEFINED";
+  reviewStatus?: "APPROVED" | "REJECTED";
+  reviewReason?: string;
 }
 
 export interface PipelineDefinition {
@@ -404,6 +412,8 @@ export interface PipelineDefinition {
     displayOrder: number;
     metadata?: Record<string, string>;
   }>;
+  reviewStatus?: "APPROVED" | "REJECTED";
+  reviewReason?: string;
 }
 
 export interface WorkflowDefinition {
@@ -416,6 +426,8 @@ export interface WorkflowDefinition {
     description: string;
     config: Record<string, unknown>;
   }>;
+  reviewStatus?: "APPROVED" | "REJECTED";
+  reviewReason?: string;
 }
 
 export interface ListDefinition {
@@ -423,6 +435,8 @@ export interface ListDefinition {
   objectType: string;
   filterGroups: Array<Record<string, unknown>>;
   dynamic: boolean;
+  reviewStatus?: "APPROVED" | "REJECTED";
+  reviewReason?: string;
 }
 
 export interface ViewDefinition {
@@ -430,6 +444,25 @@ export interface ViewDefinition {
   objectType: string;
   columns: string[];
   filters?: Array<Record<string, unknown>>;
+  reviewStatus?: "APPROVED" | "REJECTED";
+  reviewReason?: string;
+}
+
+export interface HumanRequiredItemDefinition {
+  category: string;
+  description: string;
+  reason: string;
+  priority: "LOW" | "MEDIUM" | "HIGH";
+  reviewStatus?: "APPROVED" | "REJECTED";
+  reviewReason?: string;
+}
+
+export interface QaChecklistItemDefinition {
+  category: string;
+  description: string;
+  linkedStepType?: string;
+  reviewStatus?: "APPROVED" | "REJECTED";
+  reviewReason?: string;
 }
 
 export interface BuildPlanData {
@@ -448,17 +481,8 @@ export interface BuildPlanData {
   workflows: WorkflowDefinition[];
   lists: ListDefinition[];
   views: ViewDefinition[];
-  humanRequiredItems: Array<{
-    category: string;
-    description: string;
-    reason: string;
-    priority: "LOW" | "MEDIUM" | "HIGH";
-  }>;
-  qaChecklist: Array<{
-    category: string;
-    description: string;
-    linkedStepType?: string;
-  }>;
+  humanRequiredItems: HumanRequiredItemDefinition[];
+  qaChecklist: QaChecklistItemDefinition[];
 }
 
 // ============================================================

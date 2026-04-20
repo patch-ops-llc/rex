@@ -1,5 +1,6 @@
 import { prisma, decrypt, log } from "@rex/shared";
 import type { BuildPlanData } from "@rex/shared";
+import { filterRejectedPlanItems } from "@rex/shared";
 import type { ExecutionContext, ExecutionSummary, StepResult } from "./types";
 import { verifyPortalAccess } from "./client";
 import { executePropertyGroup } from "./steps/property-groups";
@@ -143,7 +144,8 @@ export async function executeBuildPlan(
   });
 
   const planData = engagement.buildPlan.planData as unknown as BuildPlanData;
-  const steps = flattenBuildPlan(planData);
+  const approvedItemsOnlyPlan = filterRejectedPlanItems(planData);
+  const steps = flattenBuildPlan(approvedItemsOnlyPlan);
 
   if (!dryRun) {
     await prisma.buildPlan.update({
@@ -173,7 +175,7 @@ export async function executeBuildPlan(
     completedSteps: 0,
     failedSteps: 0,
     skippedSteps: 0,
-    humanRequiredItems: planData.humanRequiredItems || [],
+    humanRequiredItems: approvedItemsOnlyPlan.humanRequiredItems || [],
     errors: [],
     implementationIds: [],
   };

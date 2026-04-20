@@ -74,6 +74,28 @@ interface BuildPlanJobState {
   isStale?: boolean;
 }
 
+type PlanReviewStatus = "APPROVED" | "REJECTED";
+type ReviewableSectionKey =
+  | "propertyGroups"
+  | "properties"
+  | "customObjects"
+  | "associations"
+  | "pipelines"
+  | "workflows"
+  | "lists"
+  | "views"
+  | "humanRequiredItems"
+  | "qaChecklist";
+
+interface PlanSectionConfig {
+  key: ReviewableSectionKey;
+  label: string;
+  icon: string;
+  getTitle: (item: any) => string;
+  getMeta?: (item: any) => string | null;
+  getBody?: (item: any) => string | null;
+}
+
 function toJobState(raw: BuildPlanTabProps["buildPlanJob"] | null): BuildPlanJobState | null {
   if (!raw) return null;
   const output =
@@ -108,82 +130,178 @@ function toJobState(raw: BuildPlanTabProps["buildPlanJob"] | null): BuildPlanJob
   };
 }
 
-function PlanSummary({ planData }: { planData: any }) {
-  const sections = [
-    { label: "Property Groups", count: planData?.propertyGroups?.length || 0, icon: "📁" },
-    { label: "Properties", count: planData?.properties?.length || 0, icon: "🏷️" },
-    { label: "Custom Objects", count: planData?.customObjects?.length || 0, icon: "🔷" },
-    { label: "Associations", count: planData?.associations?.length || 0, icon: "🔗" },
-    { label: "Pipelines", count: planData?.pipelines?.length || 0, icon: "📊" },
-    { label: "Workflows", count: planData?.workflows?.length || 0, icon: "⚡" },
-    { label: "Lists", count: planData?.lists?.length || 0, icon: "📋" },
-    { label: "Views", count: planData?.views?.length || 0, icon: "👁️" },
-  ].filter((s) => s.count > 0);
+function PlanSummary({
+  planData,
+  canReview,
+  updatingItemKey,
+  onReviewItem,
+}: {
+  planData: any;
+  canReview: boolean;
+  updatingItemKey: string | null;
+  onReviewItem: (
+    section: ReviewableSectionKey,
+    index: number,
+    status: PlanReviewStatus,
+  ) => Promise<void>;
+}) {
+  const sections: PlanSectionConfig[] = [
+    {
+      key: "propertyGroups",
+      label: "Property Groups",
+      icon: "📁",
+      getTitle: (item) => item.label || item.name || "Property Group",
+      getMeta: (item) => item.objectType || null,
+    },
+    {
+      key: "properties",
+      label: "Properties",
+      icon: "🏷️",
+      getTitle: (item) => item.label || item.name || "Property",
+      getMeta: (item) => [item.objectType, item.type].filter(Boolean).join(" · ") || null,
+    },
+    {
+      key: "customObjects",
+      label: "Custom Objects",
+      icon: "🔷",
+      getTitle: (item) => item.labels?.singular || item.name || "Custom Object",
+      getMeta: (item) => item.name || null,
+    },
+    {
+      key: "associations",
+      label: "Associations",
+      icon: "🔗",
+      getTitle: (item) => item.name || `${item.fromObject} -> ${item.toObject}`,
+      getMeta: (item) => [item.fromObject, item.toObject].filter(Boolean).join(" -> ") || null,
+    },
+    {
+      key: "pipelines",
+      label: "Pipelines",
+      icon: "📊",
+      getTitle: (item) => item.label || "Pipeline",
+      getMeta: (item) => item.objectType || null,
+    },
+    {
+      key: "workflows",
+      label: "Workflows",
+      icon: "⚡",
+      getTitle: (item) => item.name || "Workflow",
+      getMeta: (item) => item.objectType || null,
+      getBody: (item) => item.enrollmentTrigger || null,
+    },
+    {
+      key: "lists",
+      label: "Lists",
+      icon: "📋",
+      getTitle: (item) => item.name || "List",
+      getMeta: (item) => [item.objectType, item.dynamic ? "Dynamic" : "Static"].filter(Boolean).join(" · ") || null,
+    },
+    {
+      key: "views",
+      label: "Views",
+      icon: "👁️",
+      getTitle: (item) => item.name || "View",
+      getMeta: (item) => item.objectType || null,
+    },
+    {
+      key: "humanRequiredItems",
+      label: "Human-Required Items",
+      icon: "⚠️",
+      getTitle: (item) => item.description || "Manual Item",
+      getMeta: (item) => [item.category, item.priority].filter(Boolean).join(" · ") || null,
+      getBody: (item) => item.reason || null,
+    },
+    {
+      key: "qaChecklist",
+      label: "QA Checklist",
+      icon: "✅",
+      getTitle: (item) => item.description || "QA Item",
+      getMeta: (item) => item.category || null,
+      getBody: (item) => item.linkedStepType ? `Linked to: ${item.linkedStepType}` : null,
+    },
+  ];
 
-  const humanItems = planData?.humanRequiredItems || [];
-  const qaItems = planData?.qaChecklist || [];
+  const sectionCards = sections
+    .map((section) => ({
+      ...section,
+      items: Array.isArray(planData?.[section.key]) ? planData[section.key] : [],
+    }))
+    .filter((section) => section.items.length > 0);
 
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        {sections.map((s) => (
-          <div key={s.label} className="rounded-lg border bg-card p-3 text-center">
-            <div className="text-2xl font-bold">{s.count}</div>
+        {sectionCards.map((s) => (
+          <div key={s.key} className="rounded-lg border bg-card p-3 text-center">
+            <div className="text-2xl font-bold">{s.items.length}</div>
             <div className="text-xs text-muted-foreground">{s.label}</div>
           </div>
         ))}
       </div>
 
-      {humanItems.length > 0 && (
-        <div className="space-y-2">
+      {sectionCards.map((section) => (
+        <div key={section.key} className="space-y-2">
           <h4 className="text-sm font-medium flex items-center gap-1.5">
-            <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
-            Human-Required Items ({humanItems.length})
+            <span>{section.icon}</span>
+            {section.label} ({section.items.length})
           </h4>
-          <div className="space-y-1">
-            {humanItems.map((item: any, i: number) => (
-              <div key={i} className="flex items-start gap-2 rounded border p-2 text-sm">
-                <span
-                  className={`mt-0.5 inline-block h-2 w-2 shrink-0 rounded-full ${
-                    item.priority === "HIGH"
-                      ? "bg-red-500"
-                      : item.priority === "MEDIUM"
-                        ? "bg-amber-500"
-                        : "bg-slate-400"
-                  }`}
-                />
-                <div>
-                  <span className="font-medium">{item.description}</span>
-                  <span className="text-xs text-muted-foreground ml-2">({item.category})</span>
-                  {item.reason && (
-                    <p className="text-xs text-muted-foreground mt-0.5">{item.reason}</p>
+          <div className="space-y-2">
+            {section.items.map((item: any, i: number) => {
+              const itemKey = `${section.key}:${i}`;
+              const reviewStatus = item?.reviewStatus as PlanReviewStatus | undefined;
+              const isUpdating = updatingItemKey === itemKey;
+              return (
+                <div key={itemKey} className="rounded border p-3 text-sm space-y-2">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-medium">{section.getTitle(item)}</p>
+                      {section.getMeta?.(item) && (
+                        <p className="text-xs text-muted-foreground mt-0.5">{section.getMeta(item)}</p>
+                      )}
+                      {section.getBody?.(item) && (
+                        <p className="text-xs text-muted-foreground mt-0.5">{section.getBody(item)}</p>
+                      )}
+                    </div>
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                        reviewStatus === "APPROVED"
+                          ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
+                          : reviewStatus === "REJECTED"
+                            ? "bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300"
+                            : "bg-muted text-muted-foreground"
+                      }`}
+                    >
+                      {reviewStatus || "UNREVIEWED"}
+                    </span>
+                  </div>
+                  {canReview && (
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant={reviewStatus === "APPROVED" ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => onReviewItem(section.key, i, "APPROVED")}
+                        disabled={isUpdating}
+                      >
+                        <ThumbsUp className="h-3.5 w-3.5 mr-1.5" />
+                        Approve Item
+                      </Button>
+                      <Button
+                        variant={reviewStatus === "REJECTED" ? "destructive" : "outline"}
+                        size="sm"
+                        onClick={() => onReviewItem(section.key, i, "REJECTED")}
+                        disabled={isUpdating}
+                      >
+                        <ThumbsDown className="h-3.5 w-3.5 mr-1.5" />
+                        Reject Item
+                      </Button>
+                    </div>
                   )}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
-      )}
-
-      {qaItems.length > 0 && (
-        <div className="space-y-2">
-          <h4 className="text-sm font-medium flex items-center gap-1.5">
-            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
-            QA Checklist ({qaItems.length})
-          </h4>
-          <div className="space-y-1">
-            {qaItems.map((item: any, i: number) => (
-              <div key={i} className="flex items-start gap-2 rounded border p-2 text-sm">
-                <span className="mt-0.5 inline-block h-2 w-2 shrink-0 rounded-full bg-slate-300" />
-                <div>
-                  <span>{item.description}</span>
-                  <span className="text-xs text-muted-foreground ml-2">({item.category})</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      ))}
 
       <details className="group">
         <summary className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground">
@@ -220,6 +338,7 @@ export function BuildPlanTab({
   const [confirmReject, setConfirmReject] = useState(false);
   const [confirmImplement, setConfirmImplement] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
+  const [updatingItemKey, setUpdatingItemKey] = useState<string | null>(null);
 
   useEffect(() => {
     setJob(toJobState(buildPlanJob));
@@ -306,6 +425,34 @@ export function BuildPlanTab({
     }
   }
 
+  async function handleReviewItem(
+    section: ReviewableSectionKey,
+    index: number,
+    status: PlanReviewStatus,
+  ) {
+    const itemKey = `${section}:${index}`;
+    setUpdatingItemKey(itemKey);
+    setError(null);
+    setSuccess(null);
+    try {
+      const res = await fetch(`/api/engagements/${engagementId}/build-plan/items/review`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ section, index, status }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to update item");
+      }
+      setSuccess(`Marked ${section}[${index + 1}] as ${status.toLowerCase()}.`);
+      router.refresh();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setUpdatingItemKey(null);
+    }
+  }
+
   async function handleApprove() {
     setApproving(true);
     setError(null);
@@ -389,6 +536,7 @@ export function BuildPlanTab({
 
   const hasDiscovery = completedCallCount > 0;
   const canApprove = buildPlan && ["DRAFT", "PENDING_REVIEW", "REJECTED"].includes(buildPlan.status);
+  const canReviewItems = !!canApprove;
   const canImplement = buildPlan?.status === "APPROVED" && hasActivePortal;
 
   return (
@@ -578,7 +726,12 @@ export function BuildPlanTab({
                   )}
                 </div>
               </div>
-              <PlanSummary planData={buildPlan.planData} />
+              <PlanSummary
+                planData={buildPlan.planData}
+                canReview={canReviewItems}
+                updatingItemKey={updatingItemKey}
+                onReviewItem={handleReviewItem}
+              />
             </div>
           )}
 

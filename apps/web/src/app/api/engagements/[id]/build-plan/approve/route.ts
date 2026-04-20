@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@rex/shared";
 import type { BuildPlanData } from "@rex/shared";
 import { pipeline } from "@rex/shared";
+import { filterRejectedPlanItems } from "@rex/shared";
 import { publishEvent } from "@rex/orchestrator";
 import { EventType } from "@rex/shared";
 import { notifyBuildPlanApproved, notifyBuildPlanRejected } from "@/lib/notifications";
@@ -65,7 +66,8 @@ export async function POST(
       });
 
       const planData = buildPlan.planData as unknown as BuildPlanData;
-      await generateImplementationTasks(params.id, planData);
+      const approvedItemsOnlyPlan = filterRejectedPlanItems(planData);
+      await generateImplementationTasks(params.id, approvedItemsOnlyPlan);
 
       await prisma.deliveryLogEntry.create({
         data: {

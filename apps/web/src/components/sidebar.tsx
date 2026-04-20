@@ -10,6 +10,7 @@ import {
   MessageSquare,
   Phone,
   Settings,
+  FlaskConical,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -20,6 +21,7 @@ const navigation = [
   { name: "Projects", href: "/projects", icon: Rocket },
   { name: "Corpus", href: "/corpus", icon: BookOpen },
   { name: "Chat", href: "/chat", icon: MessageSquare },
+  { name: "Task Lab", href: "/task-lab", icon: FlaskConical },
   { name: "Settings", href: "/settings", icon: Settings },
 ];
 

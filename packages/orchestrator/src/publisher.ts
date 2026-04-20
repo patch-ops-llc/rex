@@ -18,7 +18,17 @@ export async function publishEvent(
 
   const message = JSON.stringify(event);
   if (redis) {
-    await redis.publish(REX_EVENTS_CHANNEL, message);
+    try {
+      await redis.publish(REX_EVENTS_CHANNEL, message);
+    } catch (error: any) {
+      log({
+        level: "warn",
+        message: `Redis publish skipped: ${error.message || "unknown error"}`,
+        service: "orchestrator",
+        engagementId,
+        eventType: type,
+      });
+    }
   }
 
   log({
